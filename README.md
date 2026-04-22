@@ -1,9 +1,61 @@
 # Automated Dimensional Inspection Dashboard
-## Panduan Instalasi & Menjalankan Sistem
+
+![Python](https://img.shields.io/badge/Python-3.x-blue?logo=python)
+![Node.js](https://img.shields.io/badge/Node.js-Express-green?logo=node.js)
+![License](https://img.shields.io/badge/License-MIT-green)
+![Status](https://img.shields.io/badge/Status-Active-brightgreen)
+
+## 📖 Deskripsi Proyek
+
+**Automated Dimensional Inspection Dashboard** adalah sistem terintegrasi untuk inspeksi dimensional otomatis berbasis IoT dan machine vision. Proyek ini menggabungkan:
+
+- 📷 **Edge Device** (Python OpenCV) untuk capture dan processing gambar
+- 🖥️ **Backend Server** (Node.js + Express) untuk menyimpan & memanage data
+- 📊 **Dashboard Frontend** (HTML/CSS/JS) untuk visualisasi real-time
+
+Sistem ini dirancang untuk **Capstone Project Kelompok 2** dengan fokus pada industrial inspection dan quality control.
 
 ---
 
-## 📋 Prasyarat
+## ✨ Fitur Utama
+
+- ✅ **Real-time Dimensional Inspection** - Analisis ukuran objek secara otomatis
+- ✅ **IoT Edge Processing** - Python edge device untuk local processing
+- ✅ **Live Dashboard** - Visualisasi data dengan Chart.js
+- ✅ **Pass/Fail Detection** - Otomatis kategorisasi OK/NG berdasarkan toleransi
+- ✅ **RESTful API** - Integration-ready dengan berbagai platform
+- ✅ **Android Integration** - WebView support untuk aplikasi mobile
+- ✅ **Data Logging** - History inspeksi tersimpan di database
+
+---
+
+## 🛠️ Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| **Edge Device** | Python 3.x, OpenCV, NumPy |
+| **Backend** | Node.js, Express, JSON (File-based) |
+| **Frontend** | HTML5, CSS3, JavaScript, Chart.js |
+| **Integration** | REST API, cURL, WebView Android |
+| **License** | MIT |
+
+---
+
+## 👥 Tim Pengembang
+
+**Kelompok 2 - Capstone Project**
+
+- 🔧 **Developer**: [Nama Anggota]
+- 🎨 **UI/UX**: [Nama Anggota]
+- 📋 **Project Lead**: [Nama Anggota]
+
+*(Update dengan nama anggota tim)*
+
+---
+
+## 🚀 Quick Start
+
+### 📋 Prasyarat
 
 Sebelum menjalankan, pastikan **Node.js** sudah terinstall:
 
@@ -13,19 +65,15 @@ Sebelum menjalankan, pastikan **Node.js** sudah terinstall:
 3. Restart terminal/Command Prompt setelah install
 4. Verifikasi dengan: `node --version` dan `npm --version`
 
----
+### ⚡ Langkah-Langkah
 
-## 🚀 Cara Menjalankan
-
-### Langkah 1 — Install Dependency
-
-Buka terminal di folder `inspection-dashboard`, lalu jalankan:
+**Langkah 1 — Install Dependency**
 
 ```bash
 npm install
 ```
 
-### Langkah 2 — Jalankan Backend Server
+**Langkah 2 — Jalankan Backend Server**
 
 ```bash
 node server.js
@@ -39,7 +87,7 @@ Output yang diharapkan:
 ╚══════════════════════════════════════════════════╝
 ```
 
-### Langkah 3 — Buka Frontend Dashboard
+**Langkah 3 — Buka Frontend Dashboard**
 
 Buka browser dan akses: **http://localhost:3000**
 
@@ -48,13 +96,14 @@ Buka browser dan akses: **http://localhost:3000**
 
 ---
 
-## 🧪 Cara Testing Simulasi
+## 🧪 Testing & Simulasi
 
 ### Via Tombol UI
 Klik tombol **"⚡ Simulasi Inspeksi"** di dashboard.  
 Ini akan mengirim satu data inspeksi acak ke server.
 
 ### Via cURL (Terminal)
+
 ```bash
 # Tambah data OK manual
 curl -X POST http://localhost:3000/inspection \
@@ -74,6 +123,7 @@ curl -X DELETE http://localhost:3000/inspection
 ```
 
 ### Dari Python (Edge Device)
+
 ```python
 import requests
 
@@ -91,28 +141,35 @@ print(response.json())
 ## 📁 Struktur Project
 
 ```
-inspection-dashboard/
-├── index.html        ← Frontend utama (HTML)
-├── style.css         ← Stylesheet (dark theme)
-├── script.js         ← Logic frontend (fetch, chart, simulasi)
-├── server.js         ← Backend Node.js + Express
-├── package.json      ← Konfigurasi npm
-├── README.md         ← Dokumen ini
-└── data/
-    └── inspections.json  ← File penyimpanan data (dibuat otomatis)
+CAPSTONE/
+├── index.html              ← Frontend Dashboard
+├── style.css               ← Stylesheet (Dark Theme)
+├── script.js               ← Frontend Logic & Chart
+├── server.js               ← Backend (Node.js + Express)
+├── edge_camera.py          ← Edge Device (Python + OpenCV)
+├── package.json            ← NPM Dependencies
+├── inspections.json        ← Data Storage
+├── README.md               ← Dokumentasi (File ini)
+├── LICENSE                 ← MIT License
+├── CONTRIBUTING.md         ← Panduan Kontribusi
+└── .gitignore              ← Git Ignore Rules
 ```
 
 ---
 
 ## 🔌 API Reference
 
-| Method | Endpoint      | Deskripsi                     |
-|--------|---------------|-------------------------------|
-| GET    | /inspection   | Ambil semua data inspeksi     |
-| POST   | /inspection   | Tambah satu data baru         |
-| DELETE | /inspection   | Hapus semua data              |
+### GET /inspection
+Ambil semua data inspeksi
 
-### POST /inspection — Request Body
+```bash
+curl http://localhost:3000/inspection
+```
+
+### POST /inspection
+Tambah satu data inspeksi baru
+
+**Request Body:**
 ```json
 {
   "dimension_mm": 10.25,
@@ -120,7 +177,7 @@ inspection-dashboard/
 }
 ```
 
-### Response
+**Response:**
 ```json
 {
   "success": true,
@@ -134,13 +191,21 @@ inspection-dashboard/
 }
 ```
 
+### DELETE /inspection
+Hapus semua data inspeksi
+
+```bash
+curl -X DELETE http://localhost:3000/inspection
+```
+
 ---
 
 ## 📱 Android WebView Integration
 
-Untuk integrasi ke WebView Android, gunakan URL:  
-`http://10.0.2.2:3000` *(dari emulator Android → localhost PC)*  
-atau `http://<IP-PC>:3000` *(dari perangkat fisik — pastikan satu jaringan WiFi)*
+Untuk integrasi ke WebView Android:
+
+- **Dari Emulator**: `http://10.0.2.2:3000`
+- **Dari Device Fisik**: `http://<IP-PC>:3000` (satu jaringan WiFi)
 
 ---
 
@@ -152,8 +217,38 @@ Target: 10.0 mm ± 0.5 mm → OK
 Selain itu → NG
 ```
 
-Contoh:
+**Contoh:**
 - 9.8 mm → |9.8 - 10.0| = 0.2 ≤ 0.5 → **OK** ✅
 - 10.4 mm → |10.4 - 10.0| = 0.4 ≤ 0.5 → **OK** ✅
 - 10.7 mm → |10.7 - 10.0| = 0.7 > 0.5 → **NG** ❌
-- 9.3 mm  → |9.3 - 10.0|  = 0.7 > 0.5 → **NG** ❌
+- 9.3 mm  → |9.3 - 10.0| = 0.7 > 0.5 → **NG** ❌
+
+---
+
+## 📚 Dokumentasi Lengkap
+
+- [Edge Device Setup](./docs/EDGE_SETUP.md) - Konfigurasi Python & OpenCV
+- [API Documentation](./docs/API.md) - Detail endpoint API
+- [Troubleshooting](./docs/TROUBLESHOOTING.md) - Solusi masalah umum
+
+---
+
+## 🤝 Kontribusi
+
+Kami terbuka untuk kontribusi! Silakan baca [CONTRIBUTING.md](./CONTRIBUTING.md) untuk panduan lengkap.
+
+---
+
+## 📄 Lisensi
+
+Proyek ini dilisensikan di bawah **MIT License** - lihat file [LICENSE](./LICENSE) untuk detail.
+
+---
+
+## 📞 Kontak & Support
+
+Jika ada pertanyaan atau issue, silakan buka [GitHub Issues](https://github.com/nabsuc/CAPSTONE/issues).
+
+---
+
+**Made with ❤️ by Kelompok 2 Capstone Project**
