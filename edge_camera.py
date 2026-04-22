@@ -301,7 +301,7 @@ class APIClient:
             # Tidak perlu timestamp — backend yang generate otomatis
         }
         try:
-            resp = requests.post("http://192.168.0.3:3000/inspection", json=data)
+            resp = requests.post(self.url, json=payload, timeout=self.timeout)
             if resp.status_code == 201:
                 ts = datetime.datetime.now().strftime("%H:%M:%S")
                 print(f"  [{ts}] TERKIRIM -> {dimension_mm:.3f} mm | {status}")
