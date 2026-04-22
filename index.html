@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
+  <meta name="description" content="Dashboard monitoring inspeksi dimensi otomatis — menampilkan hasil pengukuran OK/NG secara real-time." />
+  <meta name="theme-color" content="#0a0e1a" />
+  <title>Automated Dimensional Inspection Dashboard</title>
+
+  <!-- Stylesheet -->
+  <link rel="stylesheet" href="style.css" />
+
+  <!-- Chart.js CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.2/dist/chart.umd.min.js" defer></script>
+
+  <!-- Main script -->
+  <script src="script.js" defer></script>
+</head>
+<body>
+
+<div class="app-wrapper">
+
+  <!-- ─── HEADER ──────────────────────────────────────── -->
+  <header class="header">
+    <div class="header-logo">
+      <div class="header-icon" aria-hidden="true">🔬</div>
+      <div>
+        <h1>Automated Dimensional Inspection</h1>
+        <p class="header-subtitle">Monitoring Dashboard · Edge System Integration</p>
+      </div>
+    </div>
+
+    <!-- Live Clock -->
+    <div class="live-clock" aria-live="polite" aria-label="Waktu saat ini">
+      <div class="clock-dot"></div>
+      <span class="clock-time" id="clock-time">--:--:--</span>
+      <span class="clock-date" id="clock-date"></span>
+    </div>
+  </header>
+
+  <!-- ─── CONNECTION STATUS ────────────────────────────── -->
+  <div class="connection-bar disconnected" id="connection-status" role="status" aria-live="polite">
+    <span id="conn-icon">⬤</span>
+    <span id="conn-text">Menghubungkan ke server…</span>
+  </div>
+
+  <!-- ─── LATEST RESULT CARD ──────────────────────────── -->
+  <section class="latest-card idle" id="latest-card" aria-label="Hasil inspeksi terbaru">
+    <p class="latest-label">📐 Hasil Inspeksi Terbaru</p>
+
+    <div class="latest-dimension" id="latest-dim">—</div>
+    <p class="latest-unit">mm</p>
+
+    <div class="status-badge" id="latest-badge">
+      <span>MENUNGGU DATA</span>
+    </div>
+
+    <p class="latest-timestamp" id="latest-ts">Belum ada data</p>
+  </section>
+
+  <!-- ─── STATISTIK ────────────────────────────────────── -->
+  <section class="stats-grid" aria-label="Statistik inspeksi">
+
+    <div class="stat-card total">
+      <span class="stat-icon">📊</span>
+      <span class="stat-value" id="stat-total">0</span>
+      <span class="stat-label">Total Inspeksi</span>
+    </div>
+
+    <div class="stat-card ok-stat">
+      <span class="stat-icon">✅</span>
+      <span class="stat-value" id="stat-ok">0</span>
+      <span class="stat-label">Total OK</span>
+    </div>
+
+    <div class="stat-card ng-stat">
+      <span class="stat-icon">❌</span>
+      <span class="stat-value" id="stat-ng">0</span>
+      <span class="stat-label">Total NG</span>
+    </div>
+
+    <div class="stat-card pct">
+      <span class="stat-icon">📈</span>
+      <span class="stat-value" id="stat-pct">0%</span>
+      <span class="stat-label">Persentase OK</span>
+    </div>
+
+  </section>
+
+  <!-- ─── CHART ────────────────────────────────────────── -->
+  <section class="chart-section" aria-label="Grafik distribusi OK vs NG">
+    <h2 class="section-title">
+      <span>📉</span> Distribusi Hasil Inspeksi
+    </h2>
+    <div class="chart-container">
+      <canvas id="inspectionChart" aria-label="Bar chart OK vs NG"></canvas>
+    </div>
+  </section>
+
+  <!-- ─── ACTION BUTTONS ──────────────────────────────── -->
+  <div class="actions-row" role="group" aria-label="Aksi">
+
+    <button class="btn btn-simulate" id="btn-simulate"
+            onclick="simulateInspection()"
+            aria-label="Simulasi satu data inspeksi baru">
+      <span id="simulate-icon">⚡</span>
+      Simulasi Inspeksi
+    </button>
+
+    <button class="btn btn-clear" id="btn-clear"
+            onclick="clearAllData()"
+            aria-label="Hapus semua data inspeksi">
+      🗑️ Hapus Data
+    </button>
+
+  </div>
+
+  <!-- ─── HISTORY TABLE ────────────────────────────────── -->
+  <section class="history-section" aria-label="Riwayat inspeksi">
+
+    <div class="history-header">
+      <h2 class="section-title">
+        <span>📋</span> Riwayat Inspeksi
+      </h2>
+      <span class="record-count" id="record-count">0 rekod</span>
+    </div>
+
+    <div class="table-wrapper">
+      <table id="history-table">
+        <thead>
+          <tr>
+            <th scope="col">#ID</th>
+            <th scope="col">Dimensi (mm)</th>
+            <th scope="col">Status</th>
+            <th scope="col">Waktu</th>
+          </tr>
+        </thead>
+        <tbody id="history-body">
+          <!-- Diisi oleh JavaScript -->
+        </tbody>
+      </table>
+
+      <!-- Empty state placeholder -->
+      <div class="empty-state" id="empty-state">
+        <div class="empty-state-icon">📭</div>
+        <p>Belum ada data inspeksi.<br>Tekan <strong>Simulasi Inspeksi</strong> untuk memulai.</p>
+      </div>
+    </div>
+
+  </section>
+
+  <!-- ─── FOOTER ───────────────────────────────────────── -->
+  <footer class="footer">
+    <p>Automated Dimensional Inspection Dashboard &nbsp;·&nbsp; Capstone Project A3 Kelompok 2</p>
+    <p style="margin-top:4px;">Auto-refresh setiap <strong>5 detik</strong> &nbsp;·&nbsp; Data disimpan di server</p>
+  </footer>
+
+</div><!-- /app-wrapper -->
+
+<!-- ─── TOAST CONTAINER ──────────────────────────────── -->
+<div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+</body>
+</html>
