@@ -198,9 +198,11 @@ function renderLatestCard(data) {
   const dimEl  = document.getElementById('latest-dim');
   const badge  = document.getElementById('latest-badge');
   const tsEl   = document.getElementById('latest-ts');
+  const objEl  = document.getElementById('latest-objname');
 
   if (!data || data.length === 0) {
     card.className = 'latest-card idle';
+    if (objEl) objEl.textContent = '—';
     dimEl.textContent  = '—';
     badge.innerHTML    = '<span>MENUNGGU DATA</span>';
     tsEl.textContent   = 'Belum ada data';
@@ -212,8 +214,10 @@ function renderLatestCard(data) {
   const isNew    = latest.id !== lastId;
   const isOK     = latest.status === 'OK';
   const tsFormatted = formatTimestamp(latest.timestamp);
+  const objName  = latest.object_name && String(latest.object_name).trim() ? latest.object_name : 'Tanpa nama';
 
   // Update konten
+  if (objEl) objEl.textContent = objName;
   dimEl.textContent = Number(latest.dimension_mm).toFixed(3);
   badge.innerHTML   = isOK
     ? '<span>✔ OK</span>'
@@ -227,8 +231,9 @@ function renderLatestCard(data) {
   if (isNew) {
     card.addEventListener('animationend', () => card.classList.remove('new-entry'), { once: true });
     // Tampilkan toast notifikasi
+    const objTag = latest.object_name ? `${latest.object_name} · ` : '';
     showToast(
-      `Inspeksi #${latest.id}: ${Number(latest.dimension_mm).toFixed(3)} mm — ${latest.status}`,
+      `Inspeksi #${latest.id}: ${objTag}${Number(latest.dimension_mm).toFixed(3)} mm — ${latest.status}`,
       isOK ? 'ok' : 'ng'
     );
     lastId = latest.id;
@@ -305,10 +310,12 @@ function renderHistory(data) {
     const isNewest = item.id === newestId && idx === 0;
     const dim     = Number(item.dimension_mm).toFixed(3);
     const ts      = formatTimestamp(item.timestamp);
+    const objName = item.object_name && String(item.object_name).trim() ? item.object_name : '—';
 
     return `
       <tr class="${isNewest ? 'newest-row' : ''}">
         <td class="td-id">#${item.id}</td>
+        <td class="td-obj">${escapeHtml(objName)}</td>
         <td class="td-dim">${dim}</td>
         <td class="td-status">
           <span class="pill ${isOK ? 'ok' : 'ng'}">
@@ -319,6 +326,18 @@ function renderHistory(data) {
       </tr>
     `;
   }).join('');
+}
+
+/**
+ * Escape HTML special chars to prevent injection from user-supplied object names.
+ */
+function escapeHtml(str) {
+  return String(str)
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&#39;');
 }
 
 // ─────────────────────────────────────────────────────────────────────

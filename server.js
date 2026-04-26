@@ -83,7 +83,7 @@ app.get('/inspection', (req, res) => {
  * Body: { dimension_mm: number, status: "OK"|"NG" }
  */
 app.post('/inspection', (req, res) => {
-  const { dimension_mm, status } = req.body;
+  const { dimension_mm, width_mm, status, confidence, object_name } = req.body;
 
   // Validasi input
   if (dimension_mm === undefined || dimension_mm === null) {
@@ -100,7 +100,10 @@ app.post('/inspection', (req, res) => {
 
   const newEntry = {
     id: newId,
+    object_name: (typeof object_name === 'string' && object_name.trim()) ? object_name.trim() : null,
     dimension_mm: parseFloat(Number(dimension_mm).toFixed(3)),
+    width_mm: (width_mm !== undefined && width_mm !== null) ? parseFloat(Number(width_mm).toFixed(3)) : null,
+    confidence: (confidence !== undefined && confidence !== null) ? Number(confidence) : null,
     status: status,
     timestamp: new Date().toISOString()
   };
@@ -108,7 +111,8 @@ app.post('/inspection', (req, res) => {
   data.push(newEntry);
   writeData(data);
 
-  console.log(`[+] Inspeksi #${newId} | ${dimension_mm} mm | ${status}`);
+  const tag = newEntry.object_name ? `[${newEntry.object_name}] ` : '';
+  console.log(`[+] Inspeksi #${newId} ${tag}| L=${dimension_mm} W=${newEntry.width_mm ?? '—'} mm | ${status}`);
   res.status(201).json({ success: true, message: 'Data berhasil disimpan.', data: newEntry });
 });
 

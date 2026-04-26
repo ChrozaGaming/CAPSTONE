@@ -1,16 +1,38 @@
 {
-  "name": "inspection-dashboard",
-  "version": "1.0.0",
-  "description": "Automated Dimensional Inspection Dashboard",
+  "name": "automated-dimensional-inspection",
+  "version": "2.0.0",
+  "description": "Automated Dimensional Inspection System with KTP-referenced sub-pixel calibration. Capstone A3 Kelompok 2 — Filkom Universitas Brawijaya.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
     "dev": "node server.js"
   },
+  "keywords": [
+    "computer-vision",
+    "dimensional-inspection",
+    "quality-control",
+    "opencv",
+    "rembg",
+    "ktp-calibration",
+    "capstone",
+    "filkom-ub",
+    "universitas-brawijaya"
+  ],
+  "author": "Capstone A3 Kelompok 2 - Filkom Universitas Brawijaya <hilmyraihankindy@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/ChrozaGaming/CAPSTONE#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ChrozaGaming/CAPSTONE.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ChrozaGaming/CAPSTONE/issues"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "dependencies": {
     "cors": "^2.8.5",
     "express": "^4.18.2"
-  },
-  "author": "Capstone Team",
-  "license": "MIT"
+  }
 }

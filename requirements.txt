@@ -1,0 +1,28 @@
+# ═══════════════════════════════════════════════════════════════════════
+#   Capstone A3 Kelompok 2 — Filkom Universitas Brawijaya
+#   Automated Dimensional Inspection — Edge Device Dependencies
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Install via:
+#   python -m venv .venv
+#   source .venv/bin/activate         # macOS / Linux
+#   .venv\Scripts\activate.bat        # Windows CMD
+#   pip install -r requirements.txt
+#
+# Approximate download size: ~500 MB (rembg + onnxruntime + transitive)
+# Approximate install time : 2–5 minutes on broadband
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Core computer vision & numerics ─────────────────────────────────────
+opencv-python>=4.8.0
+numpy>=1.24.0,<3.0
+
+# ── HTTP client (POST measurements to backend) ──────────────────────────
+requests>=2.31.0
+
+# ── ML-based background removal (U2-Net via ONNX) ───────────────────────
+# rembg pulls in: onnxruntime, scikit-image, pymatting, numba, llvmlite,
+# pooch, imageio, tifffile, jsonschema, etc. as transitive dependencies.
+# First call downloads u2netp.onnx (~5 MB) to ~/.u2net/ cache.
+rembg>=2.0.50
+onnxruntime>=1.17.0

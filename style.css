@@ -253,7 +253,16 @@ body::before {
   letter-spacing: 1.5px;
   text-transform: uppercase;
   color: var(--text-muted);
-  margin-bottom: 16px;
+  margin-bottom: 8px;
+}
+
+.latest-objname {
+  font-size: 1.05rem;
+  font-weight: 600;
+  color: var(--text-primary);
+  letter-spacing: 0.3px;
+  margin: 0 0 8px 0;
+  text-align: center;
 }
 
 .latest-dimension {
@@ -556,6 +565,15 @@ td.td-id {
   color: var(--text-muted);
   font-family: var(--font-mono);
   font-size: 0.78rem;
+}
+
+td.td-obj {
+  font-weight: 600;
+  color: var(--text-primary);
+  white-space: nowrap;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 td.td-dim {
