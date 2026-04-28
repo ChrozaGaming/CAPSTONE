@@ -44,6 +44,17 @@
     <span id="conn-text">Menghubungkan ke server…</span>
   </div>
 
+  <!-- ─── PENDING OBJECT NAMING ───────────────────────── -->
+  <!-- Muncul otomatis ketika edge mendeteksi objek baru yang stabil.
+       User boleh pilih: isi di sini ATAU langsung di terminal — mana duluan menang. -->
+  <section class="pending-section" id="pending-section" hidden aria-label="Objek baru menunggu nama">
+    <div class="pending-header">
+      <h2 class="section-title"><span>📝</span> Objek Baru — Beri Nama (Web ATAU Terminal)</h2>
+      <span class="pending-hint">Tekan Enter atau klik Simpan</span>
+    </div>
+    <div class="pending-list" id="pending-list"></div>
+  </section>
+
   <!-- ─── LATEST RESULT CARD ──────────────────────────── -->
   <section class="latest-card idle" id="latest-card" aria-label="Hasil inspeksi terbaru">
     <p class="latest-label">📐 Hasil Inspeksi Terbaru</p>

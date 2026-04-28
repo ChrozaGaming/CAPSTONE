@@ -15,6 +15,7 @@
 // ─── KONFIGURASI ─────────────────────────────────────────────────────
 const API_BASE       = 'http://localhost:3000';
 const REFRESH_MS     = 5000;       // Auto-refresh setiap 5 detik
+const PENDING_MS     = 1500;       // Polling pending lebih cepat agar form responsif
 const TOLERANCE_MM   = 0.5;        // ±0.5 mm dari 10.0 mm → OK
 const TARGET_MM      = 10.0;       // Nilai target dimension
 const SIM_MIN        = 9.0;        // Batas bawah simulasi
@@ -36,7 +37,9 @@ document.addEventListener('DOMContentLoaded', () => {
   startClock();
   initChart();
   fetchAndRender();                            // Pertama kali
+  fetchPending();                              // Pending objek baru
   refreshTimer = setInterval(fetchAndRender, REFRESH_MS);
+  setInterval(fetchPending, PENDING_MS);
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -428,6 +431,148 @@ function formatTimestamp(isoString) {
     return isoString;
   }
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 11. PENDING OBJECT NAMING (Web ↔ Edge hybrid)
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * Polling daftar pending dari server. Render section "Beri Nama" di atas
+ * latest card. Saat user submit, edge yang sedang polling menerima nama
+ * dan resume measurement. User juga boleh ketik di terminal — mana duluan
+ * menang.
+ */
+async function fetchPending() {
+  try {
+    const res = await fetch(`${API_BASE}/api/pending`, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) return;
+    const json = await res.json();
+    renderPending(Array.isArray(json.data) ? json.data : []);
+  } catch {
+    // Diam saja — main polling sudah menampilkan status koneksi
+  }
+}
+
+/**
+ * DOM diff render dengan TYPING-AWARE GUARD.
+ *
+ * Lapisan perlindungan untuk masalah cursor reset saat user mengetik:
+ *
+ *   Layer 1 (typing guard) — kalau user sedang fokus di input pending DAN
+ *   pending tsb masih ada di server (belum dinamai), SKIP render seluruhnya.
+ *   Tidak ada operasi DOM yang dilakukan → tidak mungkin mengganggu ketikan.
+ *
+ *   Layer 2 (DOM diff) — bila tidak sedang mengetik, hanya kartu baru yang
+ *   di-append, kartu lama yang hilang dari list di-remove. Kartu existing
+ *   tidak pernah disentuh.
+ */
+function renderPending(items) {
+  const section = document.getElementById('pending-section');
+  const list = document.getElementById('pending-list');
+  if (!section || !list) return;
+
+  // ── Layer 1: typing guard ──
+  const active = document.activeElement;
+  if (active?.classList?.contains('pending-input')) {
+    const focusedId = active.dataset.id;
+    const stillPending = items.some(p => String(p.id) === focusedId);
+    if (stillPending) {
+      // User masih mengetik di pending yang masih aktif — jangan sentuh DOM
+      return;
+    }
+  }
+
+  if (!items.length) {
+    section.hidden = true;
+    list.innerHTML = '';
+    return;
+  }
+  section.hidden = false;
+
+  // ── Layer 2: DOM diff ──
+  const incomingIds = new Set(items.map(p => String(p.id)));
+  const existingCards = new Map();
+  list.querySelectorAll('.pending-card').forEach(card => {
+    existingCards.set(card.dataset.id, card);
+  });
+
+  // Hapus kartu yang sudah tidak pending (sudah dinamai / di-skip / kadaluarsa)
+  existingCards.forEach((card, id) => {
+    if (!incomingIds.has(id)) card.remove();
+  });
+
+  // Tambah kartu baru saja — JANGAN sentuh kartu yang sudah ada
+  items.forEach(p => {
+    const idStr = String(p.id);
+    if (existingCards.has(idStr)) return;
+
+    const card = document.createElement('div');
+    card.className = 'pending-card';
+    card.dataset.id = idStr;
+    card.innerHTML = `
+      <div class="pending-info">
+        <span class="pending-id">#${p.id}</span>
+        <span class="pending-dims">L = ${Number(p.L_mm).toFixed(2)} mm  ·  W = ${Number(p.W_mm).toFixed(2)} mm</span>
+      </div>
+      <input type="text" class="pending-input" data-id="${p.id}" maxlength="60"
+             placeholder="Nama objek (mis. KTP, Botol Kecap, Spidol)…"
+             aria-label="Nama untuk objek pending #${p.id}"
+             onkeydown="if(event.key==='Enter'){event.preventDefault();submitPendingName(${p.id});}">
+      <div class="pending-actions">
+        <button type="button" class="btn-save" onclick="submitPendingName(${p.id})">💾 Simpan</button>
+        <button type="button" class="btn-skip" onclick="skipPending(${p.id})">⏭️ Lewati</button>
+      </div>
+    `;
+    list.appendChild(card);
+
+    // Auto-focus kartu baru HANYA kalau tidak ada input apa pun yang aktif
+    const activeNow = document.activeElement;
+    if (!activeNow || (activeNow.tagName !== 'INPUT' && activeNow.tagName !== 'TEXTAREA')) {
+      const inp = card.querySelector('.pending-input');
+      if (inp) inp.focus();
+    }
+  });
+}
+
+async function submitPendingName(id) {
+  const inp = document.querySelector(`.pending-input[data-id="${id}"]`);
+  if (!inp) return;
+  const name = inp.value.trim();
+  if (!name) {
+    showToast('Nama tidak boleh kosong', 'error');
+    inp.focus();
+    return;
+  }
+  try {
+    const res = await fetch(`${API_BASE}/api/pending/${id}/name`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.message || `HTTP ${res.status}`);
+    }
+    showToast(`Objek #${id} dinamai: ${name}`, 'ok');
+    fetchPending();
+  } catch (e) {
+    showToast(`Gagal menyimpan nama: ${e.message}`, 'error');
+  }
+}
+
+async function skipPending(id) {
+  try {
+    const res = await fetch(`${API_BASE}/api/pending/${id}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    showToast(`Objek #${id} dilewati`, 'info');
+    fetchPending();
+  } catch (e) {
+    showToast(`Gagal melewati: ${e.message}`, 'error');
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 12. UTILITIES (lanjutan)
+// ─────────────────────────────────────────────────────────────────────
 
 /**
  * Tampilkan toast notifikasi di pojok kanan bawah.

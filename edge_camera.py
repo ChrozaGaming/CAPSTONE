@@ -60,6 +60,7 @@ import time
 import datetime
 import threading
 import json
+import select
 from collections import deque
 
 # Optional: rembg for high-quality ML segmentation. Falls back to dominant-color
@@ -128,6 +129,7 @@ class Config:
 
     API_URL = "http://localhost:3000/inspection"
     API_TIMEOUT = 3
+    PENDING_URL = "http://localhost:3000/api/pending"
 
     C_OK = (50, 210, 50)
     C_NG = (50, 50, 220)
@@ -814,24 +816,176 @@ def evaluate_status(L, W, profile):
 
 
 def prompt_object_name(measured_L, measured_W, catalog):
-    """Blocking terminal prompt. Returns name str or None."""
+    """Hybrid naming: accept input from terminal input() OR from web dashboard.
+
+    Flow:
+      1. POST {L_mm, W_mm} ke /api/pending (kalau server jalan) → dapat {id}.
+      2. Print terminal prompt seperti biasa.
+      3. Background daemon thread polling /api/pending/:id setiap 0.6s.
+      4. Mana duluan menang:
+         - User ketik di terminal + Enter (non-empty) → terminal name dipakai.
+         - User submit di dashboard duluan → daemon thread cetak
+           "[WEB] Nama dari web: 'X' — TEKAN ENTER untuk lanjut" → user
+           tinggal tekan Enter (terminal kosong) → web name dipakai.
+         - Terminal kosong + tidak ada web → skip (None).
+      5. Server mati → POST gagal → pending_id None → daemon skip → fallback
+         ke terminal-only (perilaku v2.0 100% kompatibel).
+
+    Returns: name str atau None (skipped/cancelled).
+    """
+    cfg = Config
+
     print()
     print("  " + "═" * 58)
     print("  ▶  OBJEK BARU TERDETEKSI — beri nama untuk disimpan")
-    print("  " + "─" * 58)
     print(f"     Terukur:  L = {measured_L:.2f} mm   W = {measured_W:.2f} mm")
     if catalog.items:
         print(f"     Existing: {', '.join(it['name'] for it in catalog.items)}")
-    print("  " + "─" * 58)
+
+    # POST pending. Kalau gagal (server mati), pending_id None → fallback
+    # ke terminal-only otomatis tanpa error.
+    pending_id = None
     try:
-        name = input("     Nama benda (kosong = skip): ").strip()
-    except (KeyboardInterrupt, EOFError):
-        print()
-        return None
-    if not name:
-        print("     Dilewati.\n")
-        return None
-    return name
+        r = requests.post(
+            cfg.PENDING_URL,
+            json={"L_mm": float(measured_L), "W_mm": float(measured_W)},
+            timeout=cfg.API_TIMEOUT,
+        )
+        if r.status_code == 201:
+            pending_id = r.json().get("id")
+            if pending_id:
+                print(f"     ▶ Atau buka http://localhost:3000  (Pending #{pending_id})")
+    except Exception:
+        pass  # web optional — terminal jalan terus
+
+    print("  " + "─" * 58)
+
+    web_result = {"name": None, "received": False}
+    stop_event = threading.Event()
+
+    def web_poller():
+        if not pending_id:
+            return
+        poll_url = f"{cfg.PENDING_URL}/{pending_id}"
+        while not stop_event.is_set():
+            stop_event.wait(0.6)
+            if stop_event.is_set():
+                break
+            try:
+                pr = requests.get(poll_url, timeout=2)
+                if pr.status_code != 200:
+                    continue
+                pdata = (pr.json() or {}).get("data", {})
+                name = pdata.get("name")
+                if name == "__SKIP__":
+                    web_result["name"] = ""
+                    web_result["received"] = True
+                    print("\n  [WEB] Dilewati via web — TEKAN ENTER untuk lanjut")
+                    return
+                if name:
+                    web_result["name"] = name
+                    web_result["received"] = True
+                    print(f"\n  [WEB] Nama dari web: '{name}' — TEKAN ENTER untuk lanjut")
+                    return
+            except Exception:
+                pass
+
+    poller = None
+    if pending_id:
+        poller = threading.Thread(target=web_poller, daemon=True)
+        poller.start()
+
+    # Detect if we can do truly non-blocking stdin polling (POSIX TTY).
+    # When supported, web submit → edge proceeds INSTANTLY without requiring
+    # user to press Enter in terminal. On Windows / non-TTY → blocking fallback.
+    nonblock = False
+    if not IS_WINDOWS and sys.stdin.isatty():
+        try:
+            select.select([sys.stdin], [], [], 0)
+            nonblock = True
+        except Exception:
+            nonblock = False
+
+    terminal_input = None
+
+    if nonblock:
+        # POSIX non-blocking path: poll select() + web flag setiap 0.15s.
+        # Terminal Enter atau web submit, mana duluan menang — TANPA blocking.
+        sys.stdout.write(
+            "     Nama benda (atau submit di web — Enter = skip): "
+        )
+        sys.stdout.flush()
+        deadline = time.time() + 120.0  # hard 2-min ceiling
+        while time.time() < deadline:
+            if web_result["received"]:
+                # Web menang — finish prompt line, drop partial typing dari driver
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                try:
+                    import termios
+                    termios.tcflush(sys.stdin.fileno(), termios.TCIFLUSH)
+                except Exception:
+                    pass
+                if web_result["name"]:
+                    print(f"  [WEB] Nama diterima: '{web_result['name']}'")
+                else:
+                    print("  [WEB] Dilewati via web")
+                break
+            try:
+                rlist, _, _ = select.select([sys.stdin], [], [], 0.15)
+            except Exception:
+                rlist = None
+            if rlist:
+                line = sys.stdin.readline()
+                if not line:
+                    terminal_input = ""
+                else:
+                    terminal_input = line.rstrip("\n").strip()
+                break
+    else:
+        # Blocking fallback (Windows / piped stdin) — daemon notice + Enter required
+        def web_notice_watcher():
+            while not stop_event.is_set():
+                stop_event.wait(0.4)
+                if web_result["received"]:
+                    n = web_result["name"]
+                    if n:
+                        print(
+                            f"\n  [WEB] Nama dari web: '{n}' — TEKAN ENTER untuk lanjut"
+                        )
+                    else:
+                        print(
+                            "\n  [WEB] Dilewati via web — TEKAN ENTER untuk lanjut"
+                        )
+                    return
+        watcher = threading.Thread(target=web_notice_watcher, daemon=True)
+        watcher.start()
+        try:
+            terminal_input = input(
+                "     Nama benda (Enter kosong = pakai web / skip): "
+            ).strip()
+        except (KeyboardInterrupt, EOFError):
+            terminal_input = ""
+            print()
+
+    stop_event.set()
+    if poller:
+        poller.join(timeout=1.0)
+
+    # Cleanup pending di server kalau belum ter-handle (idempotent)
+    if pending_id and not web_result["received"]:
+        try:
+            requests.delete(f"{cfg.PENDING_URL}/{pending_id}", timeout=2)
+        except Exception:
+            pass
+
+    # Priority: terminal non-empty menang. Kalau terminal kosong, fallback ke web.
+    if terminal_input:
+        return terminal_input
+    if web_result["received"]:
+        return web_result["name"] or None
+    print("     Dilewati.\n")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════════
@@ -889,27 +1043,77 @@ def _refine_rect_corners(gray, contour):
 
 
 def _contour_touches_edge(cnt, h, w, margin=8):
-    """True if contour bounding box hugs any frame edge (likely arm/hand/clip)."""
+    """True if contour bbox hugs frame edge AND is small enough to be likely
+    an arm/finger/sleeve coming from outside (not the actual measurement
+    target).
+
+    Why size-gated: objek besar (tutup panci, piring, kotak besar) bisa secara
+    sah mengisi hampir seluruh frame dan menyentuh tepi. Sebelum gating ini,
+    filter membuang silhouette penuh dan menyisakan fragmen tengah yang
+    membuat bbox jadi sliver memanjang yang aneh.
+
+    Threshold 15% frame area dipilih karena lengan/sleeve yang masuk dari
+    tepi biasanya punya bbox <10% frame, sedangkan objek pengukuran legit
+    yang mengisi view biasanya >15%.
+    """
     x, y, bw, bh = cv2.boundingRect(cnt)
-    return (
+    touches = (
         x <= margin
         or y <= margin
         or x + bw >= w - margin
         or y + bh >= h - margin
     )
+    if not touches:
+        return False
+    # Big object filling the view → keep it (likely the actual target).
+    if bw * bh > h * w * 0.15:
+        return False
+    return True
 
 
 def _detect_skin_mask(frame):
     """YCrCb-based skin detection. Returns binary mask (uint8) where skin = 255.
+
     Why YCrCb: separates luminance from chrominance, so skin tones cluster in a
     compact 2D region (Cr, Cb) regardless of lighting. Robust across skin tones.
-    Range from established literature (Phung et al., 2002):
-      Cr ∈ [133, 173], Cb ∈ [77, 127]
+    Range dari literatur (Phung et al., 2002):  Cr ∈ [133, 173], Cb ∈ [77, 127].
+
+    EDGE-CONNECTED ONLY: hanya komponen skin yang MENYENTUH tepi frame yang
+    dianggap valid (jari/lengan datang dari luar frame, bukan muncul tiba-tiba
+    di tengah). Patch warna skin di INTERIOR objek = highlight pada plastik
+    oranye/kuning/coklat (warnanya kebetulan sama dengan kulit di YCrCb) →
+    dipertahankan agar tidak melubangi mask objek skin-tone.
+
+    Wajah pada KTP juga skin-tone tapi terisolasi di tengah → tidak dibuang.
+    Tetap kompatibel dengan kalibrasi karena MORPH_CLOSE 21×21 + RETR_EXTERNAL
+    fill di extract_measurement menghasilkan boundary yang sama atau lebih
+    bersih (lebih sedikit hole untuk ditutup).
     """
+    h, w = frame.shape[:2]
     ycrcb = cv2.cvtColor(frame, cv2.COLOR_BGR2YCrCb)
     lower = np.array([0, 133, 77], dtype=np.uint8)
     upper = np.array([255, 173, 127], dtype=np.uint8)
-    skin = cv2.inRange(ycrcb, lower, upper)
+    skin_raw = cv2.inRange(ycrcb, lower, upper)
+
+    # Keep only components that touch frame edge — those are the only ones
+    # that can be hand/arm intrusions. Internal skin patches are object content.
+    n_lab, labels, stats, _ = cv2.connectedComponentsWithStats(
+        skin_raw, connectivity=8
+    )
+    skin = np.zeros_like(skin_raw)
+    for i in range(1, n_lab):
+        x, y, bw, bh, area = stats[i]
+        if area < 200:
+            continue  # noise speck
+        touches_edge = (
+            x <= 1 or y <= 1 or x + bw >= w - 1 or y + bh >= h - 1
+        )
+        if touches_edge:
+            skin[labels == i] = 255
+
+    if not np.any(skin):
+        return skin  # nothing to subtract
+
     # Close small holes inside skin region; light dilation to catch fingertip
     # halo (anti-aliased pixels just outside skin)
     k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
@@ -1054,6 +1258,25 @@ def extract_measurement(frame, exclude_rect=None, return_mask=False):
     # MORPH_CLOSE fills gaps up to kernel size. Iter=2 → bridges up to ~42px.
     seal_k = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
     cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_CLOSE, seal_k, iterations=2)
+
+    # Fill ENCLOSED interior holes — needed for shiny/dome objects (tutup
+    # panci, piring, gelas) where rembg gives low confidence on highlight
+    # regions, leaving black islands inside the silhouette. MORPH_CLOSE
+    # alone can't bridge holes wider than ~42px.
+    #
+    # Strategi: ambil hanya OUTER contour (RETR_EXTERNAL — abaikan inner
+    # contours yang merepresentasikan holes), lalu gambar terisi penuh.
+    # Hasilnya hole internal otomatis tertutup tanpa mengubah outer boundary.
+    # Untuk KTP (mask sudah solid, tidak ada hole) → idempotent: outer
+    # contour = boundary asli, fill = boundary asli → bit-for-bit sama,
+    # akurasi kalibrasi tidak berubah.
+    contours_ext, _ = cv2.findContours(
+        cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+    )
+    if contours_ext:
+        filled = np.zeros_like(cleaned)
+        cv2.drawContours(filled, contours_ext, -1, 255, thickness=cv2.FILLED)
+        cleaned = filled
 
     # Fine erode to compensate the slight boundary outward drift caused by
     # close (when close bridges fragments, the merged blob's outer edge is
