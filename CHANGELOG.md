@@ -7,6 +7,187 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.2.0] — 2026-05-03
+
+### 🎯 Tema rilis: Hybrid Storage + Bidirectional CDC Sync
+
+Versi ini mengubah arsitektur storage dari **single-source JSON flat-file**
+menjadi **dual-store dengan PostgreSQL sebagai canonical + JSON sebagai
+mirror**, dihubungkan oleh **Change Data Capture (CDC) bidirectional** dan
+**WebSocket realtime broadcast**. Edge `edge_camera.py` **tidak diubah**
+sama sekali — kompatibel 100% dengan v2.1.0.
+
+Motivasi: pengguna ingin (a) data inspeksi bisa di-query SQL untuk
+analitik / integrasi BI / aplikasi lain, (b) JSON tetap dipertahankan
+sebagai backup offline-friendly NoSQL-style, (c) realtime push ke
+dashboard tanpa polling, (d) konsistensi antara dua store seperti
+foreign-key — perubahan di salah satu mengikuti otomatis ke yang lain.
+
+### ✨ Added — PostgreSQL Schema & Triggers
+
+- **`db/schema.sql`** — DDL idempotent untuk tabel `inspections` dengan:
+  - Kolom: `id (PK)`, `object_name`, `dimension_mm`, `width_mm`,
+    `confidence`, `status`, `timestamp`
+  - 4 CHECK constraint: `status IN ('OK','NG')`, `dimension_mm > 0`,
+    `width_mm > 0 OR NULL`, `confidence ∈ [0,1] OR NULL`
+  - 5 index: PK + `idx_inspections_ts_desc`, `idx_inspections_object_name`,
+    `idx_inspections_status`, `idx_inspections_obj_status`
+  - 3 view analitik: `v_inspection_summary`, `v_inspection_daily_trend`,
+    `v_inspection_recent`
+  - ID sengaja `INTEGER` (bukan `SERIAL`) — disuplai dari server.js
+    supaya konsisten 1:1 dengan JSON file
+- **`db/triggers.sql`** — fungsi PL/pgSQL `notify_inspection_change()`
+  + trigger AFTER INSERT/UPDATE/DELETE/TRUNCATE yang fire `pg_notify`
+  ke channel `inspection_change`. Payload JSON `{op, id, data}` dipakai
+  server.js LISTEN client untuk replikasi ke JSON.
+- **`db/seed_sample.sql`** — 15 row contoh untuk smoke test schema +
+  view analitik.
+- **`db/dml_examples.sql`** — referensi DML komprehensif (INSERT/UPDATE/
+  DELETE/SELECT, window function, outlier detection via z-score).
+
+### ✨ Added — Server CDC Pipeline (`server.js` major refactor)
+
+- **PG Pool init** dengan graceful fallback: bila `.env` salah / PG mati
+  → `pgReady=false`, server tetap jalan JSON-only mode (zero downtime).
+- **PG LISTEN client** (dedicated `Client`, bukan dari pool) yang
+  subscribe ke channel `inspection_change`. Setiap NOTIFY → parse
+  payload → replikasi ke JSON via `applyPgChangeToJson()` dengan event
+  type INSERT/UPDATE/DELETE/TRUNCATE.
+- **File watcher** via `chokidar` dengan `awaitWriteFinish` (250ms
+  stability threshold) memantau `data/inspections.json`. Setiap edit
+  manual → debounce 200ms → `reconcileJsonToPg()` diff JSON ↔ PG dan
+  push perubahan (INSERT row baru / DELETE row yang hilang).
+- **Internal write lock** (`writeDataInternal()`) mencegah feedback
+  loop: tulisan dari server sendiri (akibat NOTIFY listener) di-skip
+  oleh watcher selama 600ms.
+- **Auto-migrate JSON → PG** saat startup bila tabel PG kosong tapi
+  JSON sudah berisi (migrasi awal otomatis).
+- **Catch-up sync on PG reconnect** (`tryReconnectListener()` retry
+  setiap 5s + `catchUpPendingJsonToPg()`) — saat PG offline → online,
+  row JSON yang belum di PG di-push otomatis.
+- **WebSocket server** di `ws://localhost:3000/ws` (path-based upgrade
+  pada HTTP server yang sama, no port baru). Setiap state change
+  broadcast event `inspection.created/updated/deleted/cleared` +
+  `pending.created/named/cancelled`.
+- **Empty-file wipe semantic**: edit JSON → file 0 bytes / whitespace
+  saja → reconcile interpret sebagai intentional wipe-all → TRUNCATE
+  PG + auto-restore JSON ke `[]`. Auto-increment otomatis reset ke 1.
+- **Strict parse safety**: file JSON corrupt (sintaks salah) tidak
+  pernah men-trigger wipe PG → PG dipertahankan, log warning.
+- **REST endpoints baru** (`/api/v1/*`): `status`, `inspection`,
+  `stats/by-object`, `stats/trend`, `stats/recent` — semuanya PG-backed
+  dengan fallback JSON saat PG offline.
+- **PG-first POST** `/inspection`: `INSERT ... VALUES (MAX(id)+1, ...)`
+  + `RETURNING *`, JSON sync via NOTIFY trigger (bukan dual-write).
+  ID konsisten karena PG-side increment.
+- **Surgical DELETE** `/inspection/:id` baru — hapus single row,
+  trigger fire NOTIFY → JSON ikut sync.
+
+### ✨ Added — Dashboard Realtime (`script.js`, `index.html`, `style.css`)
+
+- **WebSocket client** dengan exponential backoff reconnect (1s → 30s).
+  Listen event `inspection.*` + `pending.*` → trigger `fetchAndRender()`
+  / `fetchPending()` instan.
+- **WS status indicator** (`⚡` di header, hijau pulsing saat online,
+  abu saat offline) dengan tooltip status koneksi.
+- **GET `/inspection`** sekarang PG-backed via REST → dashboard lihat
+  langsung perubahan dari psql / external service / direct DML.
+- **Polling REFRESH_MS** (5s) tetap jadi safety net jika WebSocket
+  terputus, tapi bukan jalur utama.
+
+### ✨ Added — Quality Assurance Harness (`qa/`)
+
+- **`qa/test_suite.js`** — 29 TC end-to-end integration test
+  (connectivity, schema integrity, REST write path, WS broadcast,
+  PG DML, analytics endpoints, pending naming, cleanup).
+- **`qa/test_cdc.js`** — 23 TC khusus bidirectional CDC sync
+  (PG → JSON via NOTIFY, JSON → PG via watcher, REST consistency,
+  safety guard).
+- **`qa/inject_dml.js`** — simulator injeksi 15 row variatif (KTP,
+  Botol Kecap, Tutup Panci, Spidol, Pulpen, dll.) dengan jeda 5 detik
+  per row. Mode `usePostMode` toggle antara REST POST atau DML direct.
+- **`qa/REPORT.md` & `qa/REPORT_CDC.md`** — auto-generated SQA report
+  dengan metadata lengkap (tester, project, environment, git commit,
+  category breakdown, detailed TC results, sign-off section).
+
+### 📦 Added — Dependencies (npm)
+
+| Library | Reason | Why this choice |
+| --- | --- | --- |
+| `pg ^8.x` | PostgreSQL driver Node.js | Industry standard, mendukung pool + dedicated Client untuk LISTEN long-lived connection. Pure JS, no native build. |
+| `ws ^8.x` | Raw WebSocket protocol | Lightweight, native browser API kompatibel (no client library needed). Path-based upgrade pada Express HTTP server. Lebih ringan dari socket.io untuk capstone scale. |
+| `dotenv ^17.x` | Environment variable loader | Standard pattern; kredensial PG dipindahkan dari hardcode ke `.env` (gitignored), `.env.example` di-commit sebagai template. |
+| `chokidar ^5.x` | File watcher dengan stability detection | `fs.watch` built-in fire multiple kali per save (atomic rename pattern editor). chokidar punya `awaitWriteFinish` untuk debounce + cross-platform reliability. Esensial untuk JSON → PG sync tanpa false trigger. |
+
+### 🛠 Fixed
+
+- **Auto-increment reset to 1** saat tabel kosong — implicit via
+  `(SELECT COALESCE(MAX(id), 0) + 1 FROM inspections)` di POST handler.
+  Konsisten di semua method delete: REST `DELETE /inspection`, psql
+  `TRUNCATE`, `DELETE FROM`, edit JSON ke `[]` / 0 bytes / whitespace.
+- **Graceful shutdown <50ms** (sebelumnya stuck di `httpServer.close()`
+  saat ada WebSocket client / HTTP keep-alive aktif). Sekarang
+  `client.terminate()` semua WS + `httpServer.closeAllConnections()` +
+  hard timeout 1.5s sebagai safety net. Ctrl-C kedua force exit
+  langsung. SIGTERM juga di-handle.
+
+### 🔒 Untouched (bumbu rahasia kalibrasi v2.0/v2.1 tetap utuh)
+
+`edge_camera.py` **tidak diubah** sama sekali. POST ke `/inspection`
+endpoint yang sama. Pipeline calibration KTP, masking, sub-pixel
+refinement, anisotropic ppmm — semua identik dengan v2.1.0.
+
+### 🗂 Architecture diagram
+
+```
+                      ┌──────────────────┐
+                      │   Dashboard UI   │
+                      │   (script.js)    │
+                      └─────┬────────▲───┘
+                  REST GET  │        │ WS realtime push
+                            ▼        │
+                      ┌─────────────┴────┐
+                      │   server.js      │  ← chokidar watch JSON
+   edge_camera.py ────►   (CDC orchestra)│
+   (UNCHANGED)        │                  │  ← pg LISTEN/NOTIFY
+                      └──┬───────┬───────┘
+                         ▼       ▼
+                  ┌──────────┐  ┌─────────────────┐
+                  │   JSON   │◄─┤  PostgreSQL     │
+                  │ (NoSQL   │  │ + triggers      │
+                  │  archive)│  │ + analytics     │
+                  └─────▲────┘  └────────▲────────┘
+                        │                │
+                user/admin           psql / BI tool /
+                edit manual          mobile app / ETL
+```
+
+### 📦 Files added/modified
+
+| File | Change | Nature |
+| --- | --- | --- |
+| `db/schema.sql` | new | DDL: table, indexes, views (170 LOC) |
+| `db/triggers.sql` | new | DDL: pg_notify trigger functions |
+| `db/seed_sample.sql` | new | DML: 15 sample rows |
+| `db/dml_examples.sql` | new | DML reference (INSERT/UPDATE/DELETE/SELECT) |
+| `qa/test_suite.js` | new | 29-TC SQA suite + REPORT.md generator |
+| `qa/test_cdc.js` | new | 23-TC CDC sync suite + REPORT_CDC.md generator |
+| `qa/inject_dml.js` | new | 15-row injection demo with 5s pacing |
+| `qa/REPORT.md` | new | Auto-generated SQA report |
+| `qa/REPORT_CDC.md` | new | Auto-generated CDC sync report |
+| `.env.example` | new | Template kredensial PG (committed) |
+| `.env` | new (gitignored) | Local PG credentials |
+| `server.js` | major refactor | +600 LOC: PG, WS, CDC, watcher |
+| `script.js` | feature add | +95 LOC: WS client + reconnect + indicator |
+| `index.html` | feature add | +1 line: WS indicator span |
+| `style.css` | feature add | +30 LOC: ws-online/offline animation |
+| `package.json` | dep add | +4 packages, version 2.1.0 → 2.2.0 |
+| `package-lock.json` | dep sync | npm install lockfile |
+| `.gitignore` | rule add | exclude `.env`, `.env.local` |
+| `edge_camera.py` | **untouched** | 0 lines changed |
+
+---
+
 ## [2.1.0] — 2026-04-28
 
 ### ✨ Added

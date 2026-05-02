@@ -14,8 +14,9 @@
 
 // ─── KONFIGURASI ─────────────────────────────────────────────────────
 const API_BASE       = 'http://localhost:3000';
-const REFRESH_MS     = 5000;       // Auto-refresh setiap 5 detik
-const PENDING_MS     = 1500;       // Polling pending lebih cepat agar form responsif
+const WS_URL         = (location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws';
+const REFRESH_MS     = 5000;       // Auto-refresh tiap 5 detik (WS tetap push instan)
+const PENDING_MS     = 1500;       // Polling pending (fallback bila WS down)
 const TOLERANCE_MM   = 0.5;        // ±0.5 mm dari 10.0 mm → OK
 const TARGET_MM      = 10.0;       // Nilai target dimension
 const SIM_MIN        = 9.0;        // Batas bawah simulasi
@@ -27,20 +28,118 @@ let inspectionChart  = null;       // Instance Chart.js
 let lastId           = null;       // ID data terakhir (deteksi perubahan)
 let refreshTimer     = null;       // Interval auto-refresh
 let isSimulating     = false;      // Mencegah double-click
-let isConnected      = false;      // Status koneksi server
+let isConnected      = false;      // Status koneksi REST server
+let ws               = null;       // WebSocket instance
+let wsBackoffMs      = 1000;       // Reconnect backoff (1s → 2s → 4s → max 30s)
 
 // ─── INIT ─────────────────────────────────────────────────────────────
 /**
- * Inisialisasi: jalankan clock, buat chart, mulai polling.
+ * Inisialisasi: jalankan clock, buat chart, mulai polling, connect WS.
  */
 document.addEventListener('DOMContentLoaded', () => {
   startClock();
   initChart();
-  fetchAndRender();                            // Pertama kali
+  fetchAndRender();                            // Pertama kali (initial state)
   fetchPending();                              // Pending objek baru
+  // Polling tetap jalan tapi lambat (15s) — WS handle real-time push.
+  // Polling masih berguna sebagai safety net bila WS disconnect & belum reconnect.
   refreshTimer = setInterval(fetchAndRender, REFRESH_MS);
   setInterval(fetchPending, PENDING_MS);
+  connectWebSocket();
 });
+
+// ─────────────────────────────────────────────────────────────────────
+// 0. WEBSOCKET REAL-TIME CONNECTION
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * Connect ke /ws → terima push event dari server tanpa polling.
+ * Reconnect otomatis dengan exponential backoff (1s → 30s max).
+ */
+function connectWebSocket() {
+  try {
+    ws = new WebSocket(WS_URL);
+  } catch (e) {
+    console.warn('[WS] Constructor gagal:', e.message);
+    scheduleReconnect();
+    return;
+  }
+
+  ws.addEventListener('open', () => {
+    console.log('[WS] connected');
+    wsBackoffMs = 1000; // reset backoff
+    setWsIndicator(true);
+    // Refresh state begitu WS connect agar konsisten dengan event yang mungkin
+    // datang sebelum subscribe.
+    fetchAndRender();
+    fetchPending();
+  });
+
+  ws.addEventListener('message', (ev) => {
+    try {
+      const msg = JSON.parse(ev.data);
+      handleWsEvent(msg);
+    } catch (e) {
+      console.warn('[WS] bad message:', e.message);
+    }
+  });
+
+  ws.addEventListener('close', () => {
+    console.log('[WS] disconnected — reconnect in', wsBackoffMs, 'ms');
+    setWsIndicator(false);
+    scheduleReconnect();
+  });
+
+  ws.addEventListener('error', () => {
+    setWsIndicator(false);
+    // 'close' akan fire setelah 'error' → reconnect via close handler
+  });
+}
+
+function scheduleReconnect() {
+  setTimeout(() => {
+    wsBackoffMs = Math.min(wsBackoffMs * 2, 30000);
+    connectWebSocket();
+  }, wsBackoffMs);
+}
+
+function handleWsEvent(msg) {
+  if (!msg?.type) return;
+  switch (msg.type) {
+    case 'hello':
+      console.log('[WS] hello — pgReady:', msg.data?.pgReady);
+      break;
+
+    case 'inspection.created':
+    case 'inspection.updated':
+    case 'inspection.deleted':
+    case 'inspection.cleared':
+      // Push instan dari WS — server.js udah sync state JSON & PG di sisinya.
+      // Dashboard tinggal re-fetch supaya list, stats, chart konsisten.
+      fetchAndRender();
+      break;
+
+    case 'pending.created':
+    case 'pending.named':
+    case 'pending.cancelled':
+      // Pending list berubah → refresh form
+      fetchPending();
+      break;
+
+    default:
+      // Event baru di future — abaikan tanpa error
+      break;
+  }
+}
+
+function setWsIndicator(online) {
+  const el = document.getElementById('ws-indicator');
+  if (!el) return;
+  el.classList.toggle('ws-online', online);
+  el.classList.toggle('ws-offline', !online);
+  el.title = online
+    ? 'Realtime WebSocket aktif — update tanpa delay'
+    : 'WebSocket offline — fallback polling 15s';
+}
 
 // ─────────────────────────────────────────────────────────────────────
 // 1. LIVE CLOCK
