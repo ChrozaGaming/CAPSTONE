@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS inspections (
     "timestamp"     TIMESTAMPTZ      NOT NULL DEFAULT NOW(),
 
     CONSTRAINT inspections_status_check
-        CHECK (status IN ('OK', 'NG')),
+        CHECK (status IN ('GOOD', 'NOT GOOD')),
     CONSTRAINT inspections_dim_positive
         CHECK (dimension_mm > 0),
     CONSTRAINT inspections_width_positive
@@ -44,7 +44,7 @@ COMMENT ON COLUMN inspections.object_name    IS 'Nama objek dari katalog (mis. K
 COMMENT ON COLUMN inspections.dimension_mm   IS 'Sisi panjang (L) dalam milimeter';
 COMMENT ON COLUMN inspections.width_mm       IS 'Sisi pendek (W) dalam milimeter';
 COMMENT ON COLUMN inspections.confidence     IS 'Skor confidence pengukuran 0–1';
-COMMENT ON COLUMN inspections.status         IS 'Hasil evaluasi terhadap profil katalog: OK atau NG';
+COMMENT ON COLUMN inspections.status         IS 'Hasil evaluasi terhadap profil katalog: GOOD atau NOT GOOD';
 COMMENT ON COLUMN inspections."timestamp"    IS 'Waktu pengukuran (ISO 8601 dari server.js)';
 
 -- ──────────────────────────────────────────────────────────────────────
@@ -68,40 +68,42 @@ CREATE INDEX IF NOT EXISTS idx_inspections_obj_status
 --  Ringkasan agregat per nama objek — pass rate, rata-rata, deviasi.
 --  Pakai dari REST endpoint analytics atau langsung SELECT untuk lapor.
 -- ──────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW v_inspection_summary AS
+DROP VIEW IF EXISTS v_inspection_summary;
+CREATE VIEW v_inspection_summary AS
 SELECT
-    COALESCE(object_name, '(tanpa nama)')                AS object_name,
-    COUNT(*)                                             AS total,
-    SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END)       AS ok_count,
-    SUM(CASE WHEN status = 'NG' THEN 1 ELSE 0 END)       AS ng_count,
+    COALESCE(object_name, '(tanpa nama)')                       AS object_name,
+    COUNT(*)                                                    AS total,
+    SUM(CASE WHEN status = 'GOOD'     THEN 1 ELSE 0 END)        AS good_count,
+    SUM(CASE WHEN status = 'NOT GOOD' THEN 1 ELSE 0 END)        AS not_good_count,
     ROUND(
-        100.0 * SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END)::numeric
+        100.0 * SUM(CASE WHEN status = 'GOOD' THEN 1 ELSE 0 END)::numeric
               / NULLIF(COUNT(*), 0),
         2
-    )                                                    AS pass_rate_pct,
-    ROUND(AVG(dimension_mm)::numeric, 3)                 AS avg_l_mm,
-    ROUND(STDDEV_SAMP(dimension_mm)::numeric, 3)         AS stddev_l_mm,
-    ROUND(AVG(width_mm)::numeric, 3)                     AS avg_w_mm,
-    ROUND(STDDEV_SAMP(width_mm)::numeric, 3)             AS stddev_w_mm,
-    MIN("timestamp")                                     AS first_inspection,
-    MAX("timestamp")                                     AS last_inspection
+    )                                                           AS pass_rate_pct,
+    ROUND(AVG(dimension_mm)::numeric, 3)                        AS avg_l_mm,
+    ROUND(STDDEV_SAMP(dimension_mm)::numeric, 3)                AS stddev_l_mm,
+    ROUND(AVG(width_mm)::numeric, 3)                            AS avg_w_mm,
+    ROUND(STDDEV_SAMP(width_mm)::numeric, 3)                    AS stddev_w_mm,
+    MIN("timestamp")                                            AS first_inspection,
+    MAX("timestamp")                                            AS last_inspection
 FROM inspections
 GROUP BY COALESCE(object_name, '(tanpa nama)')
 ORDER BY total DESC;
 
 COMMENT ON VIEW v_inspection_summary IS
-    'Ringkasan per objek: total, OK/NG count, pass rate %, rata-rata & stddev dimensi';
+    'Ringkasan per objek: total, GOOD/NOT GOOD count, pass rate %, rata-rata & stddev dimensi';
 
 -- ──────────────────────────────────────────────────────────────────────
 --  VIEW: v_inspection_daily_trend
 --  Tren harian: jumlah pengukuran per tanggal, breakdown OK/NG.
 -- ──────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW v_inspection_daily_trend AS
+DROP VIEW IF EXISTS v_inspection_daily_trend;
+CREATE VIEW v_inspection_daily_trend AS
 SELECT
-    DATE("timestamp" AT TIME ZONE 'Asia/Jakarta')        AS day,
-    COUNT(*)                                             AS total,
-    SUM(CASE WHEN status = 'OK' THEN 1 ELSE 0 END)       AS ok_count,
-    SUM(CASE WHEN status = 'NG' THEN 1 ELSE 0 END)       AS ng_count
+    DATE("timestamp" AT TIME ZONE 'Asia/Jakarta')               AS day,
+    COUNT(*)                                                    AS total,
+    SUM(CASE WHEN status = 'GOOD'     THEN 1 ELSE 0 END)        AS good_count,
+    SUM(CASE WHEN status = 'NOT GOOD' THEN 1 ELSE 0 END)        AS not_good_count
 FROM inspections
 GROUP BY DATE("timestamp" AT TIME ZONE 'Asia/Jakarta')
 ORDER BY day DESC;
@@ -113,7 +115,8 @@ COMMENT ON VIEW v_inspection_daily_trend IS
 --  VIEW: v_inspection_recent
 --  100 pengukuran terbaru dengan status & nama objek (untuk audit cepat).
 -- ──────────────────────────────────────────────────────────────────────
-CREATE OR REPLACE VIEW v_inspection_recent AS
+DROP VIEW IF EXISTS v_inspection_recent;
+CREATE VIEW v_inspection_recent AS
 SELECT
     id,
     COALESCE(object_name, '(tanpa nama)')   AS object_name,

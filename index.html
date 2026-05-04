@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0" />
-  <meta name="description" content="Dashboard monitoring inspeksi dimensi otomatis — menampilkan hasil pengukuran OK/NG secara real-time." />
+  <meta name="description" content="Dashboard monitoring inspeksi dimensi otomatis — menampilkan hasil pengukuran GOOD/NOT GOOD secara real-time." />
   <meta name="theme-color" content="#0a0e1a" />
   <title>Automated Dimensional Inspection Dashboard</title>
 
@@ -85,31 +85,77 @@
     <div class="stat-card ok-stat">
       <span class="stat-icon">✅</span>
       <span class="stat-value" id="stat-ok">0</span>
-      <span class="stat-label">Total OK</span>
+      <span class="stat-label">Total GOOD</span>
     </div>
 
     <div class="stat-card ng-stat">
       <span class="stat-icon">❌</span>
       <span class="stat-value" id="stat-ng">0</span>
-      <span class="stat-label">Total NG</span>
+      <span class="stat-label">Total NOT GOOD</span>
     </div>
 
     <div class="stat-card pct">
       <span class="stat-icon">📈</span>
       <span class="stat-value" id="stat-pct">0%</span>
-      <span class="stat-label">Persentase OK</span>
+      <span class="stat-label">Persentase GOOD (Total)</span>
+    </div>
+
+    <div class="stat-card ng-rate">
+      <span class="stat-icon">📉</span>
+      <span class="stat-value" id="stat-ng-pct">0%</span>
+      <span class="stat-label">Persentase NOT GOOD (Total)</span>
     </div>
 
   </section>
 
   <!-- ─── CHART ────────────────────────────────────────── -->
-  <section class="chart-section" aria-label="Grafik distribusi OK vs NG">
+  <section class="chart-section" aria-label="Grafik distribusi GOOD vs NOT GOOD">
     <h2 class="section-title">
       <span>📉</span> Distribusi Hasil Inspeksi
     </h2>
     <div class="chart-container">
-      <canvas id="inspectionChart" aria-label="Bar chart OK vs NG"></canvas>
+      <canvas id="inspectionChart" aria-label="Bar chart GOOD vs NOT GOOD"></canvas>
     </div>
+  </section>
+
+  <!-- ─── KLASIFIKASI PER OBJEK ───────────────────────── -->
+  <section class="grouped-section" aria-label="Klasifikasi GOOD/NOT GOOD per nama objek">
+    <div class="grouped-header">
+      <h2 class="section-title"><span>📦</span> Klasifikasi per Objek</h2>
+      <button class="btn-toggle" id="btn-group-toggle" type="button"
+              aria-pressed="true" title="Toggle: kelompokkan per nama objek atau tampilkan semua">
+        Mode: Dikelompokkan
+      </button>
+    </div>
+
+    <div class="filter-bar">
+      <input type="search" class="filter-input" id="grouped-search"
+             placeholder="🔍 Cari nama objek…" autocomplete="off"
+             aria-label="Cari nama objek di tabel klasifikasi" />
+      <span class="filter-count" id="grouped-count">0 baris</span>
+    </div>
+
+    <div class="table-wrapper">
+      <table id="grouped-table" class="sortable">
+        <thead>
+          <tr>
+            <th scope="col" data-sort-key="name"   data-sort-type="string">Objek</th>
+            <th scope="col" data-sort-key="total"  data-sort-type="number">Total</th>
+            <th scope="col" data-sort-key="good"   data-sort-type="number">GOOD</th>
+            <th scope="col" data-sort-key="ng"     data-sort-type="number">NOT GOOD</th>
+            <th scope="col" data-sort-key="goodPct" data-sort-type="number">% GOOD</th>
+            <th scope="col" data-sort-key="ngPct"   data-sort-type="number">% NOT GOOD</th>
+          </tr>
+        </thead>
+        <tbody id="grouped-body"></tbody>
+      </table>
+      <div class="empty-state" id="grouped-empty">
+        <div class="empty-state-icon">📭</div>
+        <p>Belum ada data untuk diklasifikasikan.</p>
+      </div>
+    </div>
+
+    <div class="pagination-bar" id="grouped-pagination"></div>
   </section>
 
   <!-- ─── ACTION BUTTONS ──────────────────────────────── -->
@@ -140,15 +186,28 @@
       <span class="record-count" id="record-count">0 rekod</span>
     </div>
 
+    <div class="filter-bar">
+      <input type="search" class="filter-input" id="history-search"
+             placeholder="🔍 Cari nama objek…" autocomplete="off"
+             aria-label="Cari nama objek di riwayat inspeksi" />
+      <select class="filter-select" id="history-status-filter"
+              aria-label="Filter status hasil inspeksi">
+        <option value="all">Semua Status</option>
+        <option value="GOOD">GOOD</option>
+        <option value="NOT GOOD">NOT GOOD</option>
+      </select>
+      <span class="filter-count" id="history-count">0 baris</span>
+    </div>
+
     <div class="table-wrapper">
-      <table id="history-table">
+      <table id="history-table" class="sortable">
         <thead>
           <tr>
-            <th scope="col">#ID</th>
-            <th scope="col">Objek</th>
-            <th scope="col">Dimensi (mm)</th>
-            <th scope="col">Status</th>
-            <th scope="col">Waktu</th>
+            <th scope="col" data-sort-key="id"           data-sort-type="number">#ID</th>
+            <th scope="col" data-sort-key="object_name"  data-sort-type="string">Objek</th>
+            <th scope="col" data-sort-key="dimension_mm" data-sort-type="number">Dimensi (mm)</th>
+            <th scope="col" data-sort-key="status"       data-sort-type="string">Status</th>
+            <th scope="col" data-sort-key="timestamp"    data-sort-type="date">Waktu</th>
           </tr>
         </thead>
         <tbody id="history-body">
@@ -162,6 +221,8 @@
         <p>Belum ada data inspeksi.<br>Tekan <strong>Simulasi Inspeksi</strong> untuk memulai.</p>
       </div>
     </div>
+
+    <div class="pagination-bar" id="history-pagination"></div>
 
   </section>
 

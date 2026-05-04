@@ -6,7 +6,7 @@
  *  - Polling data inspeksi dari server setiap 5 detik
  *  - Menampilkan hasil terbaru, statistik, dan riwayat
  *  - Simulasi data inspeksi acak
- *  - Update Chart.js (bar chart OK vs NG)
+ *  - Update Chart.js (bar chart GOOD vs NOT GOOD)
  *  - Live clock, toast notifications, connection status
  */
 
@@ -21,7 +21,6 @@ const TOLERANCE_MM   = 0.5;        // ±0.5 mm dari 10.0 mm → OK
 const TARGET_MM      = 10.0;       // Nilai target dimension
 const SIM_MIN        = 9.0;        // Batas bawah simulasi
 const SIM_MAX        = 11.0;       // Batas atas simulasi
-const MAX_TABLE_ROWS = 50;         // Batas tampilan riwayat
 
 // ─── STATE ───────────────────────────────────────────────────────────
 let inspectionChart  = null;       // Instance Chart.js
@@ -31,6 +30,24 @@ let isSimulating     = false;      // Mencegah double-click
 let isConnected      = false;      // Status koneksi REST server
 let ws               = null;       // WebSocket instance
 let wsBackoffMs      = 1000;       // Reconnect backoff (1s → 2s → 4s → max 30s)
+
+// Cache data terakhir + state filter/sort/pagination per-tabel.
+// Disimpan di sini supaya re-render tanpa fetch ulang ketika user mengubah filter.
+const PAGE_SIZE = 10;
+let latestData = [];
+const historyState = {
+  page: 1,
+  sortKey: 'id',          // default: ID
+  sortDir: 'desc',        // newest first
+  search: '',
+  statusFilter: 'all',    // 'all' | 'GOOD' | 'NOT GOOD'
+};
+const groupedState = {
+  page: 1,
+  sortKey: 'total',
+  sortDir: 'desc',
+  search: '',
+};
 
 // ─── INIT ─────────────────────────────────────────────────────────────
 /**
@@ -169,7 +186,7 @@ function startClock() {
 // 2. CHART.JS INITIALIZATION
 // ─────────────────────────────────────────────────────────────────────
 /**
- * Buat bar chart OK vs NG menggunakan Chart.js.
+ * Buat bar chart GOOD vs NOT GOOD menggunakan Chart.js.
  */
 function initChart() {
   const ctx = document.getElementById('inspectionChart').getContext('2d');
@@ -177,7 +194,7 @@ function initChart() {
   inspectionChart = new Chart(ctx, {
     type: 'bar',
     data: {
-      labels: ['OK ✅', 'NG ❌'],
+      labels: ['GOOD ✅', 'NOT GOOD ❌'],
       datasets: [{
         label: 'Jumlah',
         data: [0, 0],
@@ -252,12 +269,14 @@ async function fetchAndRender() {
     const data = json.data; // Array sudah diurutkan terbaru di atas
 
     setConnectionStatus(true);
-    renderLatestCard(data);
-    renderStats(data);
-    renderHistory(data);
+    latestData = Array.isArray(data) ? data : [];
+    renderLatestCard(latestData);
+    renderStats(latestData);
+    renderHistory(latestData);
+    renderGrouped(latestData);
     updateChart(
-      data.filter(d => d.status === 'OK').length,
-      data.filter(d => d.status === 'NG').length
+      latestData.filter(d => d.status === 'GOOD').length,
+      latestData.filter(d => d.status === 'NOT GOOD').length
     );
 
   } catch (err) {
@@ -314,7 +333,7 @@ function renderLatestCard(data) {
 
   const latest   = data[0];   // Data terbaru ada di indeks 0
   const isNew    = latest.id !== lastId;
-  const isOK     = latest.status === 'OK';
+  const isOK     = latest.status === 'GOOD';
   const tsFormatted = formatTimestamp(latest.timestamp);
   const objName  = latest.object_name && String(latest.object_name).trim() ? latest.object_name : 'Tanpa nama';
 
@@ -322,8 +341,8 @@ function renderLatestCard(data) {
   if (objEl) objEl.textContent = objName;
   dimEl.textContent = Number(latest.dimension_mm).toFixed(3);
   badge.innerHTML   = isOK
-    ? '<span>✔ OK</span>'
-    : '<span>✘ NG</span>';
+    ? '<span>✔ GOOD</span>'
+    : '<span>✘ NOT GOOD</span>';
   tsEl.textContent  = tsFormatted;
 
   // Ganti kelas warna
@@ -334,8 +353,9 @@ function renderLatestCard(data) {
     card.addEventListener('animationend', () => card.classList.remove('new-entry'), { once: true });
     // Tampilkan toast notifikasi
     const objTag = latest.object_name ? `${latest.object_name} · ` : '';
+    const statusLabel = isOK ? 'GOOD' : 'NOT GOOD';
     showToast(
-      `Inspeksi #${latest.id}: ${objTag}${Number(latest.dimension_mm).toFixed(3)} mm — ${latest.status}`,
+      `Inspeksi #${latest.id}: ${objTag}${Number(latest.dimension_mm).toFixed(3)} mm — ${statusLabel}`,
       isOK ? 'ok' : 'ng'
     );
     lastId = latest.id;
@@ -351,14 +371,16 @@ function renderLatestCard(data) {
  */
 function renderStats(data) {
   const total  = data.length;
-  const okCnt  = data.filter(d => d.status === 'OK').length;
-  const ngCnt  = data.filter(d => d.status === 'NG').length;
-  const pct    = total > 0 ? ((okCnt / total) * 100).toFixed(1) + '%' : '0%';
+  const okCnt  = data.filter(d => d.status === 'GOOD').length;
+  const ngCnt  = data.filter(d => d.status === 'NOT GOOD').length;
+  const goodRate = total > 0 ? ((okCnt / total) * 100).toFixed(1) + '%' : '0%';
+  const ngRate   = total > 0 ? ((ngCnt / total) * 100).toFixed(1) + '%' : '0%';
 
   animateCounter('stat-total', total);
   animateCounter('stat-ok',    okCnt);
   animateCounter('stat-ng',    ngCnt);
-  document.getElementById('stat-pct').textContent = pct;
+  document.getElementById('stat-pct').textContent    = goodRate;
+  document.getElementById('stat-ng-pct').textContent = ngRate;
 }
 
 /**
@@ -389,27 +411,49 @@ function animateCounter(id, target) {
  * @param {Array} data
  */
 function renderHistory(data) {
-  const tbody      = document.getElementById('history-body');
-  const emptyState = document.getElementById('empty-state');
+  const tbody         = document.getElementById('history-body');
+  const emptyState    = document.getElementById('empty-state');
   const recordCountEl = document.getElementById('record-count');
+  const filterCountEl = document.getElementById('history-count');
 
   recordCountEl.textContent = `${data.length} rekod`;
 
-  if (!data || data.length === 0) {
-    tbody.innerHTML    = '';
+  // 1. Apply filter (search + status)
+  const q = historyState.search.trim().toLowerCase();
+  let filtered = (data || []).filter(item => {
+    if (historyState.statusFilter !== 'all' && item.status !== historyState.statusFilter) return false;
+    if (q) {
+      const name = String(item.object_name || '').toLowerCase();
+      if (!name.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // 2. Apply sort
+  filtered = sortRows(filtered, historyState.sortKey, historyState.sortDir, getSortType('history-table', historyState.sortKey));
+
+  filterCountEl.textContent = `${filtered.length} baris`;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
     emptyState.style.display = 'block';
+    renderPagination('history-pagination', historyState, 0, () => renderHistory(latestData));
+    updateSortIndicators('history-table', historyState);
     return;
   }
-
   emptyState.style.display = 'none';
 
-  // Batasi baris tabel agar tidak overload
-  const rows = data.slice(0, MAX_TABLE_ROWS);
-  const newestId = rows[0]?.id;
+  // 3. Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  if (historyState.page > totalPages) historyState.page = totalPages;
+  if (historyState.page < 1) historyState.page = 1;
+  const start = (historyState.page - 1) * PAGE_SIZE;
+  const rows  = filtered.slice(start, start + PAGE_SIZE);
+  const newestId = (data && data.length) ? data[0].id : null;
 
-  tbody.innerHTML = rows.map((item, idx) => {
-    const isOK    = item.status === 'OK';
-    const isNewest = item.id === newestId && idx === 0;
+  tbody.innerHTML = rows.map(item => {
+    const isOK    = item.status === 'GOOD';
+    const isNewest = item.id === newestId;
     const dim     = Number(item.dimension_mm).toFixed(3);
     const ts      = formatTimestamp(item.timestamp);
     const objName = item.object_name && String(item.object_name).trim() ? item.object_name : '—';
@@ -421,13 +465,130 @@ function renderHistory(data) {
         <td class="td-dim">${dim}</td>
         <td class="td-status">
           <span class="pill ${isOK ? 'ok' : 'ng'}">
-            ${isOK ? '✔' : '✘'} ${item.status}
+            ${isOK ? '✔ GOOD' : '✘ NOT GOOD'}
           </span>
         </td>
         <td class="td-time">${ts}</td>
       </tr>
     `;
   }).join('');
+
+  renderPagination('history-pagination', historyState, totalPages, () => renderHistory(latestData));
+  updateSortIndicators('history-table', historyState);
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 7b. RENDER: KLASIFIKASI PER OBJEK
+// ─────────────────────────────────────────────────────────────────────
+let groupedMode = true; // true = group by object_name, false = flat (semua tanpa grouping)
+
+document.addEventListener('DOMContentLoaded', () => {
+  const btn = document.getElementById('btn-group-toggle');
+  if (!btn) return;
+  btn.addEventListener('click', () => {
+    groupedMode = !groupedMode;
+    btn.setAttribute('aria-pressed', String(groupedMode));
+    btn.textContent = groupedMode ? 'Mode: Dikelompokkan' : 'Mode: Semua (tanpa group)';
+    fetchAndRender();
+  });
+});
+
+/**
+ * Render klasifikasi GOOD/NOT GOOD per nama objek.
+ * Dua mode:
+ *  - groupedMode=true  → agregasi per object_name
+ *  - groupedMode=false → satu baris per inspeksi (raw, semua tanpa group)
+ */
+function renderGrouped(data) {
+  const tbody = document.getElementById('grouped-body');
+  const empty = document.getElementById('grouped-empty');
+  const countEl = document.getElementById('grouped-count');
+  if (!tbody) return;
+
+  // 1. Build base rows depending on mode
+  let baseRows = [];
+  if (!data || data.length === 0) {
+    baseRows = [];
+  } else if (groupedMode) {
+    const map = new Map();
+    for (const it of data) {
+      const name = it.object_name && String(it.object_name).trim() ? it.object_name : '—';
+      const slot = map.get(name) || { name, total: 0, good: 0, ng: 0 };
+      slot.total++;
+      if (it.status === 'GOOD') slot.good++;
+      else if (it.status === 'NOT GOOD') slot.ng++;
+      map.set(name, slot);
+    }
+    baseRows = Array.from(map.values()).map(s => ({
+      name: s.name,
+      total: s.total,
+      good: s.good,
+      ng: s.ng,
+      goodPct: s.total > 0 ? (s.good / s.total) * 100 : 0,
+      ngPct:   s.total > 0 ? (s.ng   / s.total) * 100 : 0,
+    }));
+  } else {
+    // Flat mode: satu baris per inspeksi
+    baseRows = data.map(it => {
+      const name = it.object_name && String(it.object_name).trim() ? it.object_name : '—';
+      const isOK = it.status === 'GOOD';
+      return {
+        name: `${name} #${it.id}`,
+        _searchName: name,
+        total: 1,
+        good: isOK ? 1 : 0,
+        ng:   isOK ? 0 : 1,
+        goodPct: isOK ? 100 : 0,
+        ngPct:   isOK ? 0   : 100,
+      };
+    });
+  }
+
+  // 2. Filter (search by name)
+  const q = groupedState.search.trim().toLowerCase();
+  let filtered = baseRows.filter(r => {
+    if (!q) return true;
+    const target = (r._searchName || r.name || '').toLowerCase();
+    return target.includes(q);
+  });
+
+  // 3. Sort
+  filtered = sortRows(filtered, groupedState.sortKey, groupedState.sortDir, getSortType('grouped-table', groupedState.sortKey));
+
+  countEl.textContent = `${filtered.length} baris`;
+
+  if (filtered.length === 0) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    renderPagination('grouped-pagination', groupedState, 0, () => renderGrouped(latestData));
+    updateSortIndicators('grouped-table', groupedState);
+    return;
+  }
+  empty.style.display = 'none';
+
+  // 4. Pagination
+  const totalPages = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  if (groupedState.page > totalPages) groupedState.page = totalPages;
+  if (groupedState.page < 1) groupedState.page = 1;
+  const start = (groupedState.page - 1) * PAGE_SIZE;
+  const slice = filtered.slice(start, start + PAGE_SIZE);
+
+  tbody.innerHTML = slice.map(r => {
+    const goodPctTxt = r.goodPct.toFixed(1) + '%';
+    const ngPctTxt   = r.ngPct.toFixed(1) + '%';
+    return `
+      <tr>
+        <td class="td-obj">${escapeHtml(r.name)}</td>
+        <td class="td-num">${r.total}</td>
+        <td class="td-num td-good">${r.good}</td>
+        <td class="td-num td-ng">${r.ng}</td>
+        <td class="td-num td-good">${goodPctTxt}</td>
+        <td class="td-num td-ng">${ngPctTxt}</td>
+      </tr>`;
+  }).join('');
+
+  renderPagination('grouped-pagination', groupedState, totalPages, () => renderGrouped(latestData));
+  updateSortIndicators('grouped-table', groupedState);
 }
 
 /**
@@ -441,6 +602,184 @@ function escapeHtml(str) {
     .replaceAll('"', '&quot;')
     .replaceAll("'", '&#39;');
 }
+
+// ─────────────────────────────────────────────────────────────────────
+// 7c. SORT / FILTER / PAGINATION HELPERS
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Generic stable sort. type: 'number' | 'string' | 'date'
+ * Status sort: 'GOOD' < 'NOT GOOD' (default lowercase compare sudah benar).
+ */
+function sortRows(rows, key, dir, type) {
+  const mul = dir === 'asc' ? 1 : -1;
+  const asNum  = v => (v === null || v === undefined ? -Infinity : Number(v));
+  const asStr  = v => String(v ?? '').toLowerCase();
+  const asDate = v => (v ? new Date(v).getTime() : 0);
+
+  return rows.slice().sort((a, b) => {
+    const av = a[key], bv = b[key];
+    if (type === 'number')      return (asNum(av)  - asNum(bv))  * mul;
+    if (type === 'date')        return (asDate(av) - asDate(bv)) * mul;
+    return asStr(av).localeCompare(asStr(bv)) * mul;
+  });
+}
+
+/** Look up data-sort-type pada TH untuk key tertentu. Default 'string'. */
+function getSortType(tableId, sortKey) {
+  const th = document.querySelector(`#${tableId} th[data-sort-key="${sortKey}"]`);
+  return th?.dataset.sortType || 'string';
+}
+
+/** Render arrow ▲/▼ di TH yang sedang aktif sort. */
+function updateSortIndicators(tableId, state) {
+  const ths = document.querySelectorAll(`#${tableId} th[data-sort-key]`);
+  ths.forEach(th => {
+    th.classList.remove('sort-asc', 'sort-desc');
+    if (th.dataset.sortKey === state.sortKey) {
+      th.classList.add(state.sortDir === 'asc' ? 'sort-asc' : 'sort-desc');
+    }
+  });
+}
+
+/**
+ * Render kontrol pagination di container.
+ * Tampilkan: « prev | range page (max 5) | next » | jump-to input
+ * @param {string} containerId
+ * @param {object} state - { page }
+ * @param {number} totalPages
+ * @param {function} rerender - dipanggil setelah page berubah
+ */
+function renderPagination(containerId, state, totalPages, rerender) {
+  const el = document.getElementById(containerId);
+  if (!el) return;
+  if (totalPages <= 1) {
+    // Tetap tampilkan "Halaman 1 dari 1" tapi tanpa kontrol nav agar konsisten
+    el.innerHTML = totalPages === 0
+      ? ''
+      : `<span class="page-info">Halaman 1 dari 1</span>`;
+    return;
+  }
+
+  // Sliding window of up to 5 pages around current
+  const maxBtns = 5;
+  let from = Math.max(1, state.page - 2);
+  let to   = Math.min(totalPages, from + maxBtns - 1);
+  from     = Math.max(1, to - maxBtns + 1);
+
+  const btn = (label, target, opts = {}) => {
+    const dis = opts.disabled ? 'disabled' : '';
+    const act = opts.active ? 'active' : '';
+    return `<button type="button" class="page-btn ${act}" data-page="${target}" ${dis} aria-label="${opts.aria || `Halaman ${target}`}">${label}</button>`;
+  };
+
+  let html = '';
+  html += btn('«', 1, { disabled: state.page === 1, aria: 'Halaman pertama' });
+  html += btn('‹', state.page - 1, { disabled: state.page === 1, aria: 'Halaman sebelumnya' });
+  if (from > 1) html += `<span class="page-ellipsis">…</span>`;
+  for (let p = from; p <= to; p++) {
+    html += btn(String(p), p, { active: p === state.page });
+  }
+  if (to < totalPages) html += `<span class="page-ellipsis">…</span>`;
+  html += btn('›', state.page + 1, { disabled: state.page === totalPages, aria: 'Halaman berikutnya' });
+  html += btn('»', totalPages, { disabled: state.page === totalPages, aria: 'Halaman terakhir' });
+
+  html += `
+    <span class="page-info">Halaman ${state.page} / ${totalPages}</span>
+    <span class="page-jump">
+      Ke halaman:
+      <input type="number" min="1" max="${totalPages}" value="${state.page}"
+             class="page-input" aria-label="Lompat ke halaman tertentu" />
+    </span>
+  `;
+
+  el.innerHTML = html;
+
+  // Wire up handlers
+  el.querySelectorAll('.page-btn').forEach(b => {
+    b.addEventListener('click', () => {
+      const target = parseInt(b.dataset.page, 10);
+      if (!Number.isFinite(target)) return;
+      state.page = Math.min(Math.max(1, target), totalPages);
+      rerender();
+    });
+  });
+  const input = el.querySelector('.page-input');
+  if (input) {
+    const apply = () => {
+      const v = parseInt(input.value, 10);
+      if (!Number.isFinite(v)) { input.value = state.page; return; }
+      state.page = Math.min(Math.max(1, v), totalPages);
+      rerender();
+    };
+    input.addEventListener('change', apply);
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); apply(); }
+    });
+  }
+}
+
+/** Debounce sederhana — return function yang menunda eksekusi `fn` selama `ms` setelah panggilan terakhir. */
+function debounce(fn, ms) {
+  let t = null;
+  return (...args) => {
+    clearTimeout(t);
+    t = setTimeout(() => fn(...args), ms);
+  };
+}
+
+/** Pasang sort handler pada TH dari sebuah tabel. */
+function attachSortHandlers(tableId, state, rerender) {
+  document.querySelectorAll(`#${tableId} th[data-sort-key]`).forEach(th => {
+    th.addEventListener('click', () => {
+      const k = th.dataset.sortKey;
+      if (state.sortKey === k) {
+        state.sortDir = state.sortDir === 'asc' ? 'desc' : 'asc';
+      } else {
+        state.sortKey = k;
+        // Default direction per type: number/date → desc, string → asc
+        state.sortDir = (th.dataset.sortType === 'string') ? 'asc' : 'desc';
+      }
+      state.page = 1;
+      rerender();
+    });
+  });
+}
+
+// Wire up filter/sort listeners setelah DOM siap.
+document.addEventListener('DOMContentLoaded', () => {
+  // History table
+  const histSearch = document.getElementById('history-search');
+  const histStatus = document.getElementById('history-status-filter');
+  if (histSearch) {
+    const onHistSearch = debounce(() => {
+      historyState.search = histSearch.value;
+      historyState.page = 1;
+      renderHistory(latestData);
+    }, 250);
+    histSearch.addEventListener('input', onHistSearch);
+  }
+  if (histStatus) {
+    histStatus.addEventListener('change', () => {
+      historyState.statusFilter = histStatus.value;
+      historyState.page = 1;
+      renderHistory(latestData);
+    });
+  }
+  attachSortHandlers('history-table', historyState, () => renderHistory(latestData));
+
+  // Grouped table
+  const grpSearch = document.getElementById('grouped-search');
+  if (grpSearch) {
+    const onGrpSearch = debounce(() => {
+      groupedState.search = grpSearch.value;
+      groupedState.page = 1;
+      renderGrouped(latestData);
+    }, 250);
+    grpSearch.addEventListener('input', onGrpSearch);
+  }
+  attachSortHandlers('grouped-table', groupedState, () => renderGrouped(latestData));
+});
 
 // ─────────────────────────────────────────────────────────────────────
 // 8. SIMULASI INSPEKSI
@@ -462,7 +801,7 @@ async function simulateInspection() {
 
   // Generate nilai acak
   const dim    = parseFloat((Math.random() * (SIM_MAX - SIM_MIN) + SIM_MIN).toFixed(3));
-  const status = Math.abs(dim - TARGET_MM) <= TOLERANCE_MM ? 'OK' : 'NG';
+  const status = Math.abs(dim - TARGET_MM) <= TOLERANCE_MM ? 'GOOD' : 'NOT GOOD';
 
   try {
     const res = await fetch(`${API_BASE}/inspection`, {

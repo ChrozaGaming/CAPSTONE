@@ -150,6 +150,15 @@ async function initPostgres() {
   }
 }
 
+// Translate legacy values (OK/NG) ke storage canonical (GOOD/NOT GOOD).
+// Idempotent: nilai canonical dilewatkan apa adanya. Defense-in-depth saat
+// JSON ditulis manual oleh user dengan label legacy.
+function normalizeStatus(s) {
+  if (s === 'OK')   return 'GOOD';
+  if (s === 'NG')   return 'NOT GOOD';
+  return s;
+}
+
 async function mirrorToPg(entry) {
   if (!pgReady || !pgPool) return;
   await pgPool.query(
@@ -169,7 +178,7 @@ async function mirrorToPg(entry) {
       entry.dimension_mm,
       entry.width_mm,
       entry.confidence,
-      entry.status,
+      normalizeStatus(entry.status),
       entry.timestamp,
     ],
   );
@@ -475,13 +484,19 @@ app.get('/inspection', async (_req, res) => {
 });
 
 app.post('/inspection', async (req, res) => {
-  const { dimension_mm, width_mm, status, confidence, object_name } = req.body;
+  const { dimension_mm, width_mm, status: rawStatus, confidence, object_name } = req.body;
 
   if (dimension_mm === undefined || dimension_mm === null) {
     return res.status(400).json({ success: false, message: 'dimension_mm wajib diisi.' });
   }
-  if (!['OK', 'NG'].includes(status)) {
-    return res.status(400).json({ success: false, message: 'status harus "OK" atau "NG".' });
+
+  // Translate legacy values dari edge_camera.py (OK/NG) ke storage (GOOD/NOT GOOD).
+  // edge_camera.py tidak boleh disentuh, jadi server yang melakukan translation di boundary.
+  // Tetap menerima nilai baru juga supaya client web bisa POST 'GOOD'/'NOT GOOD' langsung.
+  const STATUS_MAP = { OK: 'GOOD', NG: 'NOT GOOD', GOOD: 'GOOD', 'NOT GOOD': 'NOT GOOD' };
+  const status = STATUS_MAP[rawStatus];
+  if (!status) {
+    return res.status(400).json({ success: false, message: 'status harus "GOOD" atau "NOT GOOD" (legacy "OK"/"NG" juga diterima).' });
   }
 
   const cleanName = (typeof object_name === 'string' && object_name.trim()) ? object_name.trim() : null;

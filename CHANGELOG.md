@@ -7,6 +7,255 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.3.0] — 2026-05-04
+
+### 🎯 Tema rilis: Web UX Overhaul (Pagination / Sort / Filter / Klasifikasi per Objek) + Canonical Status Label Migration `OK→GOOD`, `NG→NOT GOOD`
+
+Versi ini menyatukan **dua arah perubahan**:
+
+1. **UX dashboard yang naik kelas** — dari "tabel polos auto-refresh" menjadi
+   pengalaman analitik interaktif: per-tabel pagination, jump-to-page input,
+   sortable headers (asc/desc), filter status, search dengan debounce, plus
+   **section baru "Klasifikasi per Objek"** untuk agregasi GOOD/NOT GOOD per
+   nama objek.
+2. **Label status kanonikal end-to-end** — sebelumnya storage menyimpan `OK`/
+   `NG` (legacy KPI internal), sementara display sudah `GOOD`/`NOT GOOD`.
+   Sekarang **PostgreSQL + JSON + server.js + script.js** semuanya pakai
+   label kanonikal `GOOD`/`NOT GOOD`. Edge `edge_camera.py` **tetap kirim
+   `OK`/`NG` apa adanya** — server boundary yang melakukan translation.
+
+Motivasi: pengguna menemukan inkonsistensi antara "yang dilihat" (GOOD/NOT
+GOOD di web) versus "yang tersimpan" (OK/NG di JSON dan PG). Sekaligus
+ingin tabel riwayat & klasifikasi yang **scale** ke ratusan/ribuan baris
+tanpa overload DOM (tabel dulu cuma slice 50 row pertama tanpa kontrol).
+
+`edge_camera.py` **tidak diubah** sama sekali — kompatibel 100% dengan
+v2.2.0 / v2.1.0. Pipeline kalibrasi/masking/sub-pixel tetap utuh.
+
+### ✨ Added — Presentation Layer (5 Stat Cards + Klasifikasi Section)
+
+- **5-card stats grid** menggantikan layout 4-card sebelumnya:
+  - `Total Inspeksi`, `Total GOOD`, `Total NOT GOOD`,
+    `Persentase GOOD (Total)`, `Persentase NOT GOOD (Total)`.
+  - Formula sesuai usulan dosen pembimbing:
+    `GOOD Rate = Total OK / Total Inspeksi × 100%` ;
+    `NG Rate  = Total NG / Total Inspeksi × 100%`.
+  - Grid responsif: 2 kolom (mobile) → 3 kolom (≥600px) → 5 kolom (≥900px).
+  - Aksen warna konsisten: cyan untuk GOOD rate, ng-primary (merah) untuk
+    NOT GOOD rate, sesuai semantic color tokens existing.
+- **Section "Klasifikasi per Objek"** (baru, antara stats grid & history table):
+  - Tabel agregasi 6 kolom: `Objek · Total · GOOD · NOT GOOD · % GOOD ·
+    % NOT GOOD`.
+  - **Toggle button "Mode: Dikelompokkan / Mode: Semua"** di kanan-atas
+    section: switch antara (a) agregasi per `object_name` sorted by total
+    desc, atau (b) flat per-inspeksi (1 baris per row, suffix `#id`).
+  - Filter bar dengan search input ber-debounce.
+  - Center-aligned untuk kolom numerik (header & value sejajar) — kolom
+    Objek tetap left-aligned untuk readability nama panjang.
+
+### ✨ Added — Pagination Component (Reusable, Riwayat + Klasifikasi)
+
+- **10 baris per halaman** (constant `PAGE_SIZE`).
+- **Sliding 5-button window**: tombol nomor halaman cukup 5 di sekitar
+  halaman aktif, ellipsis `…` muncul otomatis kalau total halaman > 5.
+- **5 kontrol navigasi**: `«` first, `‹` prev, [nomor halaman aktif/sekitar],
+  `›` next, `»` last. Disabled state otomatis pada batas.
+- **Jump-to-page input** (`<input type="number">`) di kanan kontrol —
+  ketik nomor halaman + Enter (atau blur) → langsung pindah halaman.
+  Validasi clamp ke `[1, totalPages]`.
+- **Page info readout**: `Halaman 3 / 12` di samping kontrol.
+- **Auto-clamp** kalau `state.page > totalPages` setelah filter perubahan
+  (mis. user di halaman 8, lalu apply filter yang menyisakan 2 halaman →
+  otomatis pindah ke halaman 2).
+- **Reset ke halaman 1** otomatis saat:
+  - filter search dimasukkan/diubah,
+  - status filter diubah,
+  - sort kolom/direction diubah.
+
+### ✨ Added — Sortable Headers (Riwayat + Klasifikasi)
+
+- **Click-to-sort** pada semua TH dengan `data-sort-key`. Kedua kali klik
+  TH yang sama → toggle asc ↔ desc. Klik TH lain → kolom baru, default
+  direction sesuai `data-sort-type`:
+  - `number` / `date` → default `desc` (terbaru/terbesar di atas).
+  - `string` → default `asc` (alfabetik A-Z).
+- **Sort type per kolom** declarative via `data-sort-type` di markup HTML:
+  - Riwayat: `id` (number), `object_name` (string), `dimension_mm`
+    (number), `status` (string), `timestamp` (date).
+  - Klasifikasi: `name` (string), `total/good/ng/goodPct/ngPct` (number).
+- **Visual indicator** pada TH:
+  - Default sortable: `↕` opacity 35%.
+  - Aktif sort: `▲` (asc) atau `▼` (desc) cyan, opacity 100%.
+- **Generic `sortRows(rows, key, dir, type)`** helper:
+  - `number`: numeric subtract.
+  - `date`: `new Date(v).getTime()` subtract.
+  - `string`: `localeCompare()` lowercase — Indonesia-friendly.
+  - Stable sort via `Array.prototype.sort` + `slice()` copy.
+
+### ✨ Added — Filter & Search Layer
+
+- **Riwayat Inspeksi**:
+  - Search input nama objek dengan **debounce 250ms** (`debounce()`
+    helper) — tidak banjir filter saat user mengetik cepat.
+  - Status filter dropdown: `Semua Status / GOOD / NOT GOOD` (canonical
+    values selaras storage baru).
+  - Counter live `N baris` di kanan filter bar — menunjukkan jumlah
+    setelah filter, terpisah dari `record-count` yang menunjukkan total
+    semua data.
+- **Klasifikasi per Objek**:
+  - Search input nama objek dengan debounce 250ms.
+  - Counter live `N baris`.
+  - Pencarian bekerja di kedua mode (grouped pakai field `name`,
+    flat pakai field `_searchName` tanpa suffix `#id`).
+- Filter bar styling konsisten dengan tema dashboard: `--bg-card-hover`
+  background, focus ring cyan dengan `box-shadow 0 0 0 2px`.
+
+### ✨ Added — State Cache & Render Pipeline
+
+- **`latestData` cache** di top-level state — menyimpan response terakhir
+  dari `/inspection`. Filter/sort/pagination re-render **tanpa fetch
+  ulang** ke server — instant feedback.
+- **`historyState` & `groupedState`** objects mengelola
+  `{ page, sortKey, sortDir, search, statusFilter }` per-tabel
+  independen. Tidak saling interferensi.
+- Pipeline render baru: `data → filter → sort → paginate → DOM`. Setiap
+  perubahan state via UI memanggil rerender langsung.
+
+### 🔄 Changed — Status Label Canonical Migration `OK→GOOD`, `NG→NOT GOOD`
+
+**Penting**: ini perubahan storage layer. Konsumer database eksternal
+(BI tool, custom psql query) **perlu update** predicate dari `WHERE
+status='OK'/'NG'` menjadi `WHERE status='GOOD'/'NOT GOOD'`.
+
+- **PostgreSQL migration** (run on existing DB at v2.2.0):
+  - `DROP CONSTRAINT inspections_status_check`,
+  - `UPDATE inspections SET status = CASE WHEN 'OK' THEN 'GOOD' WHEN 'NG'
+    THEN 'NOT GOOD' END` — 28 row migrated.
+  - `ADD CONSTRAINT ... CHECK (status IN ('GOOD', 'NOT GOOD'))`.
+  - **Views recreated** (CREATE OR REPLACE tidak bisa rename column):
+    `v_inspection_summary` & `v_inspection_daily_trend` —
+    `ok_count` → `good_count`, `ng_count` → `not_good_count`.
+- **JSON migration**: `data/inspections.json` 28 row dimigrasi in-place
+  pakai `node -e` script (atomic write `JSON.stringify(..., null, 2)`).
+- **`db/schema.sql`** updated:
+  - CHECK constraint baru `IN ('GOOD', 'NOT GOOD')`.
+  - View definitions pakai `DROP VIEW IF EXISTS` + `CREATE VIEW`
+    (idempotent saat re-apply ke DB lain).
+  - Column comment status update ke "GOOD atau NOT GOOD".
+- **`server.js` translation layer** di POST `/inspection`:
+  - **`STATUS_MAP = { OK: 'GOOD', NG: 'NOT GOOD', GOOD: 'GOOD', 'NOT
+    GOOD': 'NOT GOOD' }`** — idempotent.
+  - Edge `edge_camera.py` POST `status: 'OK'/'NG'` tetap diterima → di-
+    translate ke kanonikal sebelum INSERT. Web client POST
+    `'GOOD'/'NOT GOOD'` juga diterima.
+  - Validation message update: `"status harus 'GOOD' atau 'NOT GOOD'
+    (legacy 'OK'/'NG' juga diterima)"`.
+- **`normalizeStatus()` defense-in-depth helper** di `mirrorToPg`:
+  - Bila JSON di-edit manual oleh user dengan label legacy `'OK'/'NG'`,
+    `mirrorToPg` translate sebelum INSERT supaya CHECK constraint tidak
+    reject.
+- **`script.js`** internal status comparisons:
+  - `status === 'OK'` → `status === 'GOOD'`.
+  - `status === 'NG'` → `status === 'NOT GOOD'`.
+  - Simulate POST body update ke `'GOOD'/'NOT GOOD'`.
+  - Sort comparator `status` dihapus special-case karena sekarang
+    string compare langsung sudah konsisten dengan display.
+- **`index.html`** filter dropdown `<option value>` update ke canonical.
+- **Display label** di seluruh UI sudah `GOOD`/`NOT GOOD`:
+  - Stat card label, badge latest result, chart axis, history pill,
+    klasifikasi table cells, toast notification, meta description,
+    aria-labels.
+
+### 🔄 Changed — Removed `MAX_TABLE_ROWS = 50` Constant
+
+- Konstanta lama `MAX_TABLE_ROWS = 50` di `script.js` di-deprecated dan
+  dihapus — pagination 10/halaman menggantikan slice manual.
+- Konsekuensi: tabel tidak lagi cap di 50 baris terbaru. Semua row dapat
+  dijelajahi via pagination kontrol.
+
+### 🛠 Fixed — Center Alignment di Tabel Klasifikasi
+
+- Sebelumnya: TH `text-align: left` + TD `text-align: right` → header
+  dan nilai tidak sejajar visually di kolom numerik.
+- Sekarang: kolom Objek (kolom 1) left-aligned, kolom numerik
+  (kolom 2-6) **center-aligned untuk header & value** → angka tepat di
+  bawah label header. Arrow sort `▲▼` di-padding-right 22px supaya
+  tidak nempel ke teks center.
+
+### 🔒 Untouched (zero touch sesuai konstrain capstone)
+
+`edge_camera.py` **tidak diubah** sama sekali — 0 baris. POST status
+`'OK'/'NG'` tetap valid via translation layer di server boundary.
+
+Komponen pipeline kalibrasi yang tetap utuh dari v2.0.0 → v2.3.0:
+`Config.PIXELS_PER_MM_L/W`, `save_calibration` / `load_calibration`,
+`calibration_wizard` + `_wizard_phase_ktp`, `_refine_rect_corners` +
+`cv2.cornerSubPix`, `_rembg_mask`, `_dominant_color_mask`,
+MORPH_CLOSE 21×21 sealing pipeline.
+
+### ⚠️ Migration Notes — Untuk Konsumer DB Direct
+
+Konsumer database yang **bypass server.js** (psql query manual, BI tool,
+custom analytics) **perlu update query**:
+
+| Sebelum (v2.2.0) | Sesudah (v2.3.0) |
+| --- | --- |
+| `WHERE status = 'OK'` | `WHERE status = 'GOOD'` |
+| `WHERE status = 'NG'` | `WHERE status = 'NOT GOOD'` |
+| `SELECT ok_count, ng_count FROM v_inspection_summary` | `SELECT good_count, not_good_count FROM v_inspection_summary` |
+
+API publik (POST `/inspection`) tetap kompatibel — legacy `'OK'/'NG'`
+diterima oleh server lewat `STATUS_MAP`. Tapi **disarankan** client
+baru langsung pakai canonical `'GOOD'/'NOT GOOD'`.
+
+### ✅ Verified
+
+- **Smoke test 4 POST** kombinasi (legacy OK, legacy NG, canonical GOOD,
+  canonical NOT GOOD) → semua tersimpan canonical di PG dan JSON.
+- **CDC sync PG↔JSON** tetap jalan paska migration (test insert/delete
+  via REST → trigger NOTIFY → JSON sync ✓).
+- `node --check server.js` & `node --check script.js` pass.
+- Pre-migration & post-migration row count konsisten: 28 row total
+  (7 GOOD + 21 NOT GOOD), tidak ada data loss.
+
+### 📦 Files modified
+
+| File | Lines added | Lines removed | Nature |
+| --- | --- | --- | --- |
+| `script.js` | +401 | -56 | Pagination/sort/filter helpers, latestData cache, klasifikasi render, debounce, status comparisons canonical |
+| `style.css` | +185 | -8 | Filter bar, sortable TH, pagination bar, klasifikasi table center, ng-rate accent |
+| `index.html` | +85 | -16 | 5-card stats grid, klasifikasi section, filter bar markup, sortable th attributes, pagination containers, dropdown values canonical |
+| `db/schema.sql` | +27 | -20 | CHECK constraint canonical, DROP+CREATE views (good_count/not_good_count) |
+| `server.js` | +20 | -5 | STATUS_MAP translation, normalizeStatus() helper, validation message update |
+| `package.json` | +1 | -1 | version 2.2.0 → 2.3.0 |
+| `data/inspections.json` (gitignored) | runtime | runtime | 28 rows migrated OK→GOOD, NG→NOT GOOD |
+| `edge_camera.py` | **0** | **0** | **untouched** |
+
+### 🗂 Translation Flow Diagram
+
+```
+   edge_camera.py POST status='OK'/'NG' (legacy, unchanged)
+                            │
+                            ▼
+   ┌────────────────────────────────────────────────┐
+   │ server.js POST /inspection                     │
+   │   STATUS_MAP = { OK→GOOD, NG→NOT GOOD,         │
+   │                  GOOD→GOOD, NOT GOOD→NOT GOOD }│
+   └──────────────┬─────────────────────────────────┘
+                  │ canonical 'GOOD'/'NOT GOOD'
+                  ▼
+   ┌──────────────────────────────────────────────┐
+   │ PostgreSQL inspections                       │
+   │   CHECK (status IN ('GOOD','NOT GOOD'))      │
+   └──────┬───────────────────────────────┬───────┘
+          │ NOTIFY                        │ SELECT
+          ▼                               ▼
+   data/inspections.json              Web Dashboard
+   (canonical 'GOOD'/'NOT GOOD')      (display 'GOOD'/'NOT GOOD')
+```
+
+---
+
 ## [2.2.0] — 2026-05-03
 
 ### 🎯 Tema rilis: Hybrid Storage + Bidirectional CDC Sync
