@@ -1,6 +1,6 @@
 {
   "name": "capstone-vps-dashboard",
-  "version": "0.1.0",
+  "version": "2.4.0",
   "private": true,
   "description": "Capstone A3 Kelompok 2 — VPS Dashboard (Next.js 14 + NextAuth + Prisma). Untuk supervisor & manager dari mana saja.",
   "scripts": {

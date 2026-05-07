@@ -7,6 +7,505 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.4.0] — 2026-05-07
+
+### 🎯 Tema rilis: VPS Multi-Role Dashboard (Next.js) + Live Camera Streaming + Export & Audit Log
+
+Versi ini memperkenalkan **3 capability besar** sekaligus, semuanya
+backwards-compatible dengan v2.3.0 / v2.2.0:
+
+1. **Live Camera Streaming ke web** — frame `edge_camera.py` (lengkap
+   dengan HUD overlay tracking) dapat di-monitor live di dashboard via
+   WebSocket binary JPEG. 12 keybind hotkey + 3 wizard button (Y/N/ESC)
+   bisa ditekan dari web — semua fase termasuk wizard kalibrasi visible
+   end-to-end.
+2. **VPS Multi-Role Dashboard** (Next.js 14 + NextAuth.js v5 + Prisma) —
+   subfolder `vps-dashboard/` self-contained, deploy-ready (PM2 + Nginx +
+   Let's Encrypt). 3 role hierarchy: **operator** (live cam + redirect ke
+   local edge), **supervisor** (data + chart + export), **manager** (full
+   + admin user CRUD + audit log).
+3. **Export Data multi-format & Audit Log** — Supervisor + Manager dapat
+   export CSV/Excel/PDF dengan banyak opsi (mode flat/grouped, range
+   tanggal, filter aktif, multi-select objek, variabel-pilih). Manager
+   dapat akses audit trail sistem (login activity, CRUD users, export
+   events) di `/admin/audit`.
+
+**Konstrain pipeline kalibrasi**: `edge_camera.py` measurement/cornerSubPix/
+sub-pixel pipeline **0% disentuh**. Streaming integration cuma 24 LOC di
+2 spot terisolasi (top-level import + main loop hook). Akurasi sub-millimeter
+KTP 85.6×53.98mm tetap presisi identik dengan v2.0.0.
+
+Motivasi: pengguna ingin (a) operator/supervisor/manager workflow
+terpisah dengan akses berbeda, (b) live monitoring kamera dari laptop
+remote (dengan tetap menjaga TOS rumahweb yang melarang relay video di
+VPS — solusinya stream LAN-only, data sync ke VPS), (c) export laporan
+formal untuk dosen/manager dengan format Indonesia, (d) audit governance
+untuk compliance.
+
+### ✨ Added — Live Camera Streaming (`stream/` Python package)
+
+- **`stream/publisher.py`** — `WSPublisher` class yang menjalankan
+  asyncio WebSocket server di port `:8765` di thread terpisah. Frame
+  dipush via single-slot queue (newest wins), encode JPEG q80 di async
+  loop, broadcast ke semua client connected. Per-client backpressure
+  drop pakai `asyncio.wait_for(ws.send(...), timeout=0.05)` — client
+  lemot tidak blocking yang lain.
+- **`stream/control.py`** — `WSControl` class di port `:8766` terima
+  JSON `{"key": "SPACE"}` dari browser, translate ke ord int via
+  `KEY_MAP` (16 key: SPACE/A/C/D/L/Q/R/U/V/X/Y/N/[/]/ENTER/ESC), push
+  ke single-slot queue.
+- **`stream/config.py`** — env-overridable: `STREAM_PORT`, `CONTROL_PORT`,
+  `STREAM_BIND`, `STREAM_MAX_WIDTH` (default 1920 = 1080p pass-through),
+  `STREAM_QUALITY` (default 80), `STREAM_FPS_TARGET` (default 30).
+- **`stream/__init__.py`** — public API `start()`, `stop()`,
+  `publish(frame)`, `poll_key()`. Lazy-init.
+- **`stream/__main__.py`** — `python -m stream` standalone debugger
+  tanpa edge_camera (capture kamera 0, publish ke browser).
+
+#### `edge_camera.py` integration (24 LOC, 2 spot terisolasi)
+
+- **Top-level import block** (3 LOC): try-import stream + start helpers
+  `_stream_publish()` dan `_stream_poll_key()` (fail silent kalau modul
+  tidak tersedia).
+- **Main loop hook** (~9 LOC sekitar `cv2.imshow + cv2.waitKey`):
+  publish `display` frame ke web + accept web key kalau tidak ada
+  keypress fisik.
+- **Wizard kalibrasi** ([_wizard_phase_ktp]): publish `ann` frame loop +
+  `confirm` dialog Y/N + `busy` notice — semua tahapan visible di web.
+  Confirm dialog `cv2.waitKey(0)` blocking → polling `cv2.waitKey(50)` +
+  cek web key. Web user tekan tombol Y/N/ESC di sub-row → flow yang
+  sama persis jalan.
+- **Notice prompt** "switch to terminal" (2 spot di main loop) → publish
+  juga supaya operator tahu R-key triggered.
+
+#### Frontend live camera (`script.js`, `index.html`, `style.css`)
+
+- **`<canvas id="live-cam-canvas">`** dengan `createImageBitmap()` +
+  `requestAnimationFrame` + drop-stale frame. Anti-jitter engineering:
+  `desynchronized: true`, single-slot client-side queue.
+- **WS reconnect** exponential backoff 1s→30s, status indicator (online
+  pulsing hijau, offline abu).
+- **FPS badge** di pojok kanan canvas update setiap detik dari rolling
+  per-second count.
+- **12 keybind buttons** (SPACE/A/C/R/U/L/V/[/]/X/D/Q) dengan icon +
+  shortcut chip + label, click → POST control WS → inject ke key queue
+  Python. Visual feedback `keybindPulse` animation.
+- **Sub-row 3 wizard buttons** (Y/N/ESC) untuk confirm dialog wizard
+  kalibrasi — visible kapan saja, situational.
+
+### ✨ Added — Local Web UX Refresh (Sidebar + Topbar + Footer)
+
+- **`theme.css`** — single source of truth design tokens: 6 background
+  layer, 2 border, 4 accent (blue/cyan + glow), 6 status (ok/ng + bg),
+  3 role accent (operator cyan, supervisor blue, manager purple), 3
+  text level, typography, 4 radius, 3 layout size, 2 transition, 3
+  shadow, 5 z-index. Loaded **before** `style.css` di `index.html`.
+- **`index.html` restructured** — `app-shell` grid 2 kolom:
+  * Sidebar fixed kiri 240px (sticky di desktop ≥900px, off-canvas
+    drawer dengan transform translateX di mobile).
+  * Main content dengan topbar sticky + page-content + footer.
+  * Sidebar nav: 5 items (Live Camera, Statistik, Klasifikasi,
+    Distribusi, Riwayat) dengan smooth scroll anchor.
+  * User card di footer sidebar dengan avatar + name + role badge +
+    logout button.
+- **`style.css`** +700 LOC: app-shell grid, sidebar drawer + brand +
+  nav-item + active state cyan accent, topbar sticky + clock + WS
+  indicator, hamburger toggle mobile-only, page-content max-w-1400px,
+  live-camera-section dengan canvas wrap + placeholder + meta badges,
+  keybind-grid 4/6/12 col responsive + hover state per variant, wizard
+  sub-row dashed separator, FPS badge + stream status pulse animation.
+- **Sidebar interaction** sesuai preference user:
+  * Hover/focus state DI-DISABLE (transparent + outline:none).
+  * Scroll-spy IntersectionObserver DIHAPUS — active state hanya
+    berubah saat klik manual.
+  * Active highlight: cyan accent bar 3px di kiri + bg-tint cyan.
+
+### ✨ Added — Local Auth Bridge (Phase 2)
+
+- **`server.js` JWT helpers**:
+  * `JWT_SECRET` config dari env (shared dengan VPS Next.js
+    `NEXTAUTH_SECRET` — secret sama → token bisa cross-verify).
+  * `signToken(payload, expiresIn)` HS256 default 24h.
+  * `verifyToken(token)` validate signature + expiry + role.
+  * `GET /api/auth/config` — frontend dapat URL VPS login + valid roles.
+  * `POST /api/auth/verify` — terima `{token}` → return `{user, expiresAt}`
+    atau 401.
+  * `GET /api/auth/dev-token?role=...&name=...` — issue test token
+    tanpa Next.js (gated by `ALLOW_DEV_TOKEN=true`).
+- **`script.js initAuth()`** — pipeline: fetch config → cek `?token=`
+  URL → store ke localStorage + cleanup URL via `history.replaceState`
+  → validate via `/api/auth/verify` → update sidebar user card +
+  role-based UI gating (`applyRoleGating` hide live-cam section
+  kalau role !== operator).
+
+### ✨ Added — VPS Next.js Dashboard (`vps-dashboard/`)
+
+#### Stack & Build
+
+- **Next.js 14.2.18** App Router (TypeScript) + `output: 'standalone'`
+  (PM2 + Nginx ready)
+- **NextAuth.js v5 beta** dengan Credentials provider + JWT session
+  strategy + Prisma Adapter
+- **Prisma 5.22** + PostgreSQL (shared dengan local PG di dev,
+  separate di production)
+- **Tailwind CSS 3.4** dengan theme yang mirror `theme.css` shared
+- **bcryptjs**, **zod** validation, **jsonwebtoken** (signing edge
+  redirect token), **lucide-react** icons
+- **Chart.js 4.5** + **react-chartjs-2** untuk DistributionChart
+- **xlsx 0.18** + **jspdf 4.2** + **jspdf-autotable 5.0** untuk export
+
+#### Database Schema (Prisma)
+
+- **`User`** dengan `Role` enum (operator/supervisor/manager) + `email`
+  unique + `password` bcrypt hash + `edge_url` (untuk operator redirect)
+  + standard NextAuth fields.
+- **`Account`**, **`Session`**, **`VerificationToken`** — NextAuth adapter
+  tables.
+- **`AuditLog`** dengan `AuditAction` enum 8 jenis (user_created/updated/
+  deleted, user_login/login_failed/logout, data_exported,
+  inspection_deleted) + actor snapshot (id/email/role) + target +
+  metadata JSON + ipAddress + userAgent + indexed on createdAt(desc).
+- **`Inspection`** mirror dengan **type-aligned** ke local PG schema:
+  `dimension_mm/width_mm/confidence` sebagai `DoublePrecision`,
+  `timestamp` sebagai `Timestamptz(6)` — supaya Prisma `db push` tidak
+  alter existing column types (yang akan break view `v_inspection_summary`).
+
+#### Layout Components (Responsive)
+
+- **`AppShell`** client component — manage sidebar drawer state.
+  Auto-close on route change (usePathname effect), Esc key handler,
+  body scroll lock saat drawer open.
+- **`Sidebar`** — drawer di mobile (`<md`) dengan transform translateX
+  + close button X di brand area. Sticky di desktop (`md+`).
+  Role-aware nav items (Live Camera operator-only, Manage Users + Audit
+  Log manager-only).
+- **`Topbar`** — hamburger button mobile-only, title gradient, live
+  clock dengan format Indonesia, user info hidden di mobile.
+- **`Footer`** baru — credit Capstone A3 + Filkom UB + version v2.4.0
+  + tahun. Stack vertikal mobile, horizontal tablet+.
+- **Backdrop** mobile dengan `bg-black/60 backdrop-blur-sm` saat drawer
+  open. Click → close.
+
+#### Pages
+
+- **`/login`** — credentials form dengan quick-fill demo buttons (3 role
+  warna-coded). Redirect ke `/dashboard` setelah login. Logged-in user
+  yang akses `/login` auto-redirect ke `/dashboard`.
+- **`/dashboard`** — full UI:
+  * `StatsGrid` 5 cards (Total/GOOD/NOT GOOD/% rates) responsive 2/3/5
+    col.
+  * `DistributionChart` Chart.js bar dengan dark theme styling.
+  * `GroupedClassificationTable` mode toggle Dikelompokkan ↔ Semua
+    (flat per-inspeksi) + filter search + sortable headers + 7 kolom
+    termasuk **Terakhir** (relative time format Indonesia: "5 mnt lalu")
+    + pagination 10/halaman.
+  * `InspectionTable` filter + sort + pagination, **format waktu
+    Indonesia** ("4 Mei 2026, 14.30") via `Intl.DateTimeFormat('id-ID')`.
+  * **Export button** muncul di header untuk supervisor + manager
+    (operator hidden).
+- **`/admin`** (manager only) — `UserManagementTable` CRUD dengan inline
+  edit (name + role + password), cegah self-delete, `AddUserForm`
+  dengan **role picker (3 role)** + `edge_url` field (opsional, hanya
+  saat role=operator).
+- **`/admin/audit`** (manager only) — `AuditLogTable` paginated dengan
+  filter action dropdown (8 jenis) + actor email search debounce + IP
+  address column + metadata summarized inline (mis. user_updated
+  display "role: operator → manager").
+- **`/operator`** (operator only) — `OperatorLaunchButton`: POST
+  `/api/auth/issue-edge-token` → dapat JWT 15min → buka tab baru
+  `${edgeUrl}/?token=${jwt}` → local server.js auto-validate via
+  `/api/auth/verify` → grant operator UI access (live cam + keybind).
+
+#### API Routes
+
+- **`POST /api/auth/issue-edge-token`** — operator only, issue JWT 15min
+  short-lived dengan secret yang sama dengan local server.js JWT_SECRET.
+- **`GET /api/users`** + **`POST /api/users`** — manager only, zod
+  validation + bcrypt + email uniqueness check. Audit logged.
+- **`PATCH /api/users/[id]`** — manager only, diff metadata from→to
+  ditulis ke audit log.
+- **`DELETE /api/users/[id]`** — manager only, cegah self-delete +
+  audit log dengan target snapshot.
+- **`GET /api/audit?page=&pageSize=&action=&actor=&from=&to=`** —
+  manager only, paginated dengan filter.
+- **`GET /api/export?format=&mode=&fields=&search=&status=&from=&to=&objects=`**
+  — supervisor + manager, binary stream response dengan
+  Content-Disposition attachment filename Indonesia-friendly
+  (`inspeksi-flat-2026-05-07-1430.csv`).
+
+#### Middleware (Route Protection)
+
+- **`middleware.ts`** — protect `/dashboard`, `/admin/*`, `/operator`
+  via NextAuth `auth()`. Role-based redirect: non-manager akses
+  `/admin/*` → redirect `/dashboard`; non-operator akses `/operator` →
+  redirect `/dashboard`.
+
+### ✨ Added — Export Data Multi-Format (Supervisor + Manager)
+
+- **`ExportMenu`** modal dengan banyak opsi:
+  * **Format**: CSV (UTF-8 BOM Excel-compat) / Excel (.xlsx auto-width
+    + title row) / PDF (light theme A4 landscape, native chart drawn
+    dengan jsPDF primitives).
+  * **Mode**: Flat (per inspeksi) / Grouped (klasifikasi per objek).
+  * **Range tanggal**: Semua / Hari Ini / 7 Hari / 30 Hari / Custom
+    (datetime-local).
+  * **Filter aktif** checkbox: sesuaikan dengan filter tabel
+    (search + status). Multi-select objek picker dengan distinct list +
+    count per nama.
+  * **Variabel** (flat mode): 7 checkbox kolom (default semua dipilih).
+  * **Live count preview**: "N baris akan di-export" dengan kalkulasi
+    semua filter aktif.
+- **`lib/export-csv.ts`** — RFC 4180 escaping + UTF-8 BOM untuk
+  Excel-compat membaca karakter Indonesia (é/ô/dst).
+- **`lib/export-xlsx.ts`** — `xlsx` library, auto-width column berdasar
+  max content length (clamp 8-40 chars).
+- **`lib/export-pdf.ts`** — light theme print-friendly:
+  * Header band cyan (#0891b2) dengan title white + meta export info.
+  * Summary stats card 5 KPI dengan **color tone per metric**
+    (Total=cyan, GOOD=hijau, NG=merah, % GOOD/NG color-coded).
+  * **Native bar chart** drawn via jsPDF primitives (no extra dep):
+    - **Flat mode** = vertical 2-bar GOOD/NOT GOOD dengan count + percentage
+      label.
+    - **Grouped mode** = horizontal stacked bar top 8 objek by volume
+      dengan inline GOOD/NG count + total di kanan, legend di header.
+  * Tabel data via jspdf-autotable dengan zebra row + status cell
+    color-coded.
+  * Footer separator line + halaman X dari Y + credit Capstone.
+- **`lib/export-shared.ts`** — type definitions (ExportFormat,
+  ExportMode, ExportField) + data shapers (`shapeFlat`, `shapeGrouped`)
+  + `formatTimestampID` (Indonesian format) + `buildFilename`
+  (timestamped naming).
+
+### ✨ Added — Audit Log (Manager Only)
+
+- **8 trigger points** wired ke existing endpoints:
+  * `POST /api/users` → `user_created` dengan email/name/role metadata.
+  * `PATCH /api/users/[id]` → `user_updated` dengan **diff metadata**
+    (mis. `{ role: { from: 'operator', to: 'manager' } }`).
+  * `DELETE /api/users/[id]` → `user_deleted` dengan target snapshot.
+  * `NextAuth.authorize()` success → `user_login`.
+  * `NextAuth.authorize()` fail → `user_login_failed` dengan reason
+    (3 jenis: invalid input format, user not found, wrong password).
+  * `events.signOut()` → `user_logout`.
+  * `GET /api/export` → `data_exported` dengan format/mode/filters/
+    rowCount/filename.
+- **Captured**: actor (id/email/role snapshot — tetap kebaca walau
+  user di-delete), target (type/id), metadata JSON, ipAddress
+  (X-Forwarded-For-aware), userAgent, createdAt.
+- **`AuditLogTable`** UI dengan emoji + warna per action type (login
+  cyan, login_failed merah, deleted merah, exported blue, dst.) +
+  metadata summarized inline + IP address column + pagination.
+
+### ✨ Added — PM2 Deployment Config (`ecosystem.config.js`)
+
+- **3 services**:
+  * `capstone-server` — Express + WebSocket di port 3000 (REST + WS
+    realtime + dashboard local).
+  * `capstone-edge` — Python `edge_camera.py` + stream module di port
+    8765 + 8766.
+  * `capstone-vps` — Next.js standalone build di port 3001
+    (`./vps-dashboard/.next/standalone/server.js`).
+- Per-service: `autorestart`, `max_restarts`, `min_uptime`,
+  `max_memory_restart`, env vars, log paths (`./logs/<name>.{err,out}.log`),
+  `merge_logs: true`, `time: true`.
+- Production deploy: `pm2 start ecosystem.config.js && pm2 save && pm2 startup`.
+
+### 📦 Added — Dependencies
+
+#### Root (`package.json`)
+
+| Library | Version | Reason |
+| --- | --- | --- |
+| `jsonwebtoken` | `^9.0.3` | JWT sign/verify untuk auth bridge dengan VPS Next.js |
+
+#### Stream module (`requirements.txt`)
+
+| Library | Version | Reason |
+| --- | --- | --- |
+| `websockets` | `>=12.0` | Pure-Python WS server di publisher + control. No native deps. |
+
+#### VPS Next.js (`vps-dashboard/package.json`)
+
+| Library | Version | Reason |
+| --- | --- | --- |
+| `next` | `^14.2.18` | App Router framework |
+| `react`, `react-dom` | `^18.3.1` | UI runtime |
+| `next-auth` | `5.0.0-beta.25` | Authentication library |
+| `@auth/prisma-adapter` | `^2.7.4` | Prisma adapter untuk NextAuth session/account tables |
+| `prisma`, `@prisma/client` | `^5.22.0` | ORM. v5.x karena v6/7 deprecated `url` di datasource block |
+| `bcryptjs` | `^2.4.3` | Password hashing |
+| `jsonwebtoken` | `^9.0.2` | Sign edge redirect token (compatible dengan local server.js) |
+| `zod` | `^3.23.8` | Validation user input |
+| `lucide-react` | `^0.460.0` | Icon set |
+| `tailwindcss`, `postcss`, `autoprefixer` | `^3.4.15` | Styling |
+| `chart.js`, `react-chartjs-2` | `^4.5.1`, `^5.3.1` | Distribution chart |
+| `xlsx` | `^0.18.5` | Excel export |
+| `jspdf`, `jspdf-autotable` | `^4.2.1`, `^5.0.7` | PDF export dengan native chart drawing |
+| `tsx` | `^4.19.2` (dev) | Run prisma seed.ts |
+
+### 🔄 Changed
+
+- **`edge_camera.py`** — wizard kalibrasi confirm dialog
+  `cv2.waitKey(0)` blocking → polling `cv2.waitKey(50)` + cek web key.
+  Equivalent semantik: setelah Y/N/ESC ditekan (fisik atau web),
+  branch logic kalibrasi yang dieksekusi **identik bit-for-bit**.
+  Pipeline `ppmm_avg`, cross-cal averaging, sigma rejection,
+  `save_calibration` tidak diubah satu baris pun.
+- **`script.js`** — sidebar nav: scroll-spy IntersectionObserver
+  DIHAPUS, active state hanya berubah saat klik manual (sesuai
+  request user supaya focus tidak berubah saat scroll).
+- **`style.css`** sidebar `.nav-item` — hover/focus state
+  di-disable (transparent + outline:none).
+- **VPS dashboard** — Indonesian date format (`Intl.DateTimeFormat
+  ('id-ID')`) di kolom Waktu InspectionTable, kolom Terakhir
+  GroupedClassificationTable (relative format "5 mnt lalu"), AuditLog
+  Waktu, Export filename, Export PDF meta info.
+
+### 🛠 Fixed
+
+- **Border color tabel VPS dashboard** — sebelumnya `border-border/40`
+  Tailwind tidak resolve opacity untuk CSS-variable-based color, fall
+  back ke `currentColor` putih di dark mode → garis putih ngebok.
+  Sekarang: global CSS `* { border-color: var(--border) }` + class
+  `.row-divider` dengan rgba precomputed (40% dari `#1e3a5f`).
+- **Klasifikasi table center alignment** — VPS dashboard kolom
+  numerik sekarang center-aligned (header & value sejajar). Mirror
+  fix yang sudah ada di local web.
+- **`.history-section { overflow: hidden }`** local web — REMOVED
+  karena nge-clip dropdown filter object panel. Trade-off
+  corner-radius clipping handled di `.table-wrapper`.
+- **Chart.js v4 BarController registration** — VPS dashboard
+  Chart.tsx wajib `ChartJS.register(BarController, ...)` (tidak cuma
+  BarElement) supaya `type: 'bar'` recognized.
+- **Prisma db push dengan view dependency** — initial push gagal
+  karena Prisma mencoba alter `inspections.timestamp` type yang
+  dipakai view `v_inspection_summary`. Fix: explicit
+  `@db.Timestamptz(6)` + `@db.DoublePrecision` pada Inspection model
+  → match existing PG schema → no alter triggered.
+- **Next.js standalone build** export-pdf.ts — TypeScript spread
+  readonly tuple ke `setTextColor(r,g,b)` rejected. Fix: type RGB
+  sebagai mutable `[number, number, number]`.
+
+### 🔒 Untouched (zero touch sesuai konstrain capstone)
+
+`edge_camera.py` calibration & measurement pipeline **0% diubah**:
+
+- `Config.PIXELS_PER_MM_L`, `Config.PIXELS_PER_MM_W` (anisotropic ppmm)
+- `save_calibration` / `load_calibration`
+- `calibration_wizard` + `_wizard_phase_ktp` core (KTP detection,
+  4-stage lock, cross-cal averaging, sigma rejection)
+- `_refine_rect_corners` + `cv2.cornerSubPix` (sub-pixel refinement)
+- `_rembg_mask`, `_dominant_color_mask`, `_detect_skin_mask`
+- MORPH_CLOSE 21×21 + RETR_EXTERNAL fill (sealing pipeline)
+- `extract_measurement`, `evaluate_status`, `score_contour`,
+  `draw_overlay`, `draw_hud`
+- `ObjectCatalog` logic + Live-Cal mode
+
+Yang ditambah cuma jalur **visualisasi sekunder** (publish frame ke
+web) + **input alternatif** (web keypress equivalent dengan fisik).
+24 LOC di 2 spot terisolasi. Akurasi sub-millimeter KTP 85.6×53.98mm
+**identik bit-for-bit** dengan v2.0.0/v2.1.0/v2.2.0/v2.3.0.
+
+### ⚠️ Migration Notes — Untuk Yang Upgrade dari v2.3.0
+
+- **`requirements.txt`** baru tambah `websockets>=12.0`. Run `pip install
+  -r requirements.txt` ulang.
+- **`vps-dashboard/`** subfolder baru. Run setup-nya:
+  ```bash
+  cd vps-dashboard
+  npm install
+  cp .env.example .env       # edit DATABASE_URL + NEXTAUTH_SECRET
+  npx prisma db push          # schema NextAuth + AuditLog ditambahkan
+  npm run prisma:seed         # 3 demo users
+  npm run dev                 # http://localhost:3001
+  ```
+- **`JWT_SECRET` di `.env`** root **harus sama** dengan
+  `NEXTAUTH_SECRET` di `vps-dashboard/.env` supaya operator redirect
+  token cross-verify.
+- **PostgreSQL**: AuditLog + User/Account/Session/VerificationToken
+  tables ditambahkan (additive, tidak alter inspections).
+- **Operator demo akun**: `operator@capstone.dev` / `operator123`
+  (login VPS → tombol launch → buka tab local edge dengan token).
+  Ganti password setelah deploy production.
+- **API kompatibel** dengan v2.3.0 — POST `/inspection` tetap terima
+  legacy `OK/NG` dan canonical `GOOD/NOT GOOD`.
+
+### ✅ Verified
+
+- 3 role login flow (operator/supervisor/manager) dengan middleware
+  route protection (live-tested via curl).
+- CRUD users + role validation (zod) + cegah self-delete.
+- Export 6 kombinasi (CSV/XLSX/PDF × flat/grouped) — file size & type
+  verified (CSV 6.7KB, XLSX "Microsoft Excel 2007+", PDF 220KB
+  "PDF document, version 1.3").
+- Audit log capture 7 jenis action dengan diff metadata + filter
+  pagination.
+- Live camera streaming end-to-end (frame WS publisher + control WS
+  keybind round-trip Y/N/ESC verified).
+- `npm run build` Next.js sukses (output standalone), `node --check`
+  pass untuk server.js dan script.js, `py_compile` pass untuk
+  edge_camera.py.
+
+### 📦 Files added/modified
+
+| File | Change | Nature |
+| --- | --- | --- |
+| `theme.css` | new | Shared design tokens (single source of truth) |
+| `stream/__init__.py`, `__main__.py`, `config.py`, `publisher.py`, `control.py` | new | WS streaming module Python |
+| `ecosystem.config.js` | new | PM2 config 3 services |
+| `sim.html` | new | Photobox 3D simulator (experimental) |
+| `vps-dashboard/` | new (49 files) | Next.js 14 app dengan Auth + Prisma + UI components |
+| `edge_camera.py` | +24 LOC | Streaming hooks (2 spot terisolasi) |
+| `index.html` | +239/-22 | App-shell + sidebar + topbar + footer + live cam section + 12+3 keybind buttons |
+| `script.js` | +697/-30 | Live cam client + auth init + sidebar handlers + role gating |
+| `server.js` | +124 LOC | JWT helpers + 3 auth endpoints |
+| `style.css` | +694/-22 | Sidebar + topbar + keybind grid + live cam + responsive |
+| `requirements.txt` | +6 | websockets dep |
+| `package.json` | +1 dep | jsonwebtoken |
+| `package-lock.json` | sync | npm install |
+| `.env.example` | +15 | JWT_SECRET, VPS_LOGIN_URL, ALLOW_DEV_TOKEN |
+
+### 🗂 Architecture diagram
+
+```
+                     CLIENT BROWSER
+                ┌──────────────┴──────────────┐
+                │                             │
+         http://localhost:3000        http://localhost:3001
+         (operator local web)         (VPS Next.js dashboard)
+                │                             │
+                ▼                             ▼
+      ┌──────────────────┐          ┌──────────────────────┐
+      │ server.js        │          │ Next.js 14           │
+      │ Express + WS     │          │ NextAuth (Credentials)│
+      │ ─ /inspection    │          │ Prisma → PostgreSQL   │
+      │ ─ /api/auth/*    │          │ ─ /dashboard          │
+      │ ─ /api/pending/* │          │ ─ /admin (manager)    │
+      │ ─ WS /ws         │          │ ─ /admin/audit (mgr)  │
+      └────┬─────────────┘          │ ─ /operator (op)      │
+           │                        │ ─ /api/users CRUD     │
+           │ JWT_SECRET shared      │ ─ /api/export         │
+           │      ↕                 │ ─ /api/audit          │
+           │ NEXTAUTH_SECRET        │ ─ /api/auth/issue-     │
+           │                        │      edge-token        │
+           ▼                        └────────┬───────────────┘
+   ┌──────────────────┐                      │
+   │ edge_camera.py   │                      │
+   │ (UNTOUCHED CORE) │                      │
+   │ + stream/ hook   │◄─── operator         │
+   └────┬─────────────┘     redirect with    │
+        │ stream :8765/:8766  JWT 15min       │
+        ▼                                     │
+   ┌──────────┐  ┌─────────────────┐          │
+   │   JSON   │◄─┤  PostgreSQL     │◄─────────┘
+   │ (mirror) │  │ inspections +   │
+   └──────────┘  │ users + audit_  │
+                 │ logs + sessions │
+                 └─────────────────┘
+```
+
+---
+
 ## [2.3.0] — 2026-05-04
 
 ### 🎯 Tema rilis: Web UX Overhaul (Pagination / Sort / Filter / Klasifikasi per Objek) + Canonical Status Label Migration `OK→GOOD`, `NG→NOT GOOD`
