@@ -1,0 +1,111 @@
+/* ====================================================================
+   globals.css — VPS Dashboard
+   Import shared design tokens dari CAPSTONE/theme.css supaya visually
+   identik dengan local web. Tailwind config (tailwind.config.ts)
+   nge-pull warna via CSS variables yang didefinisikan di sini.
+   ==================================================================== */
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── Inline copy dari CAPSTONE/theme.css ──────────────────────────────
+   Single source of truth ada di CAPSTONE/theme.css. Kalau token
+   berubah di sana, copy ulang ke sini (atau setup symlink/build step).
+   Phase 7 nanti bisa otomatisasi via `next-postcss` plugin.
+   ==================================================================== */
+
+:root {
+  /* Background layers */
+  --bg-primary:       #0a0e1a;
+  --bg-secondary:     #111827;
+  --bg-card:          #1a2235;
+  --bg-card-hover:    #1e293b;
+  --bg-sidebar:       #0d1424;
+  --bg-topbar:        #0f172a;
+
+  /* Borders */
+  --border:           #1e3a5f;
+  --border-light:     #2d4a6e;
+
+  /* Accents */
+  --accent-blue:      #3b82f6;
+  --accent-blue-glow: #3b82f630;
+  --accent-cyan:      #06b6d4;
+  --accent-cyan-glow: #06b6d430;
+
+  /* Status */
+  --ok-primary:       #10b981;
+  --ng-primary:       #ef4444;
+
+  /* Role accents */
+  --role-operator:    #06b6d4;
+  --role-supervisor:  #3b82f6;
+  --role-manager:     #a855f7;
+
+  /* Text */
+  --text-primary:     #f1f5f9;
+  --text-secondary:   #94a3b8;
+  --text-muted:       #475569;
+
+  /* Typography */
+  --font-sans:        'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:        'JetBrains Mono', 'SF Mono', Menlo, monospace;
+
+  /* Sizes */
+  --radius-sm:        8px;
+  --radius-md:        12px;
+  --radius-lg:        16px;
+  --radius-xl:        24px;
+  --sidebar-width:    240px;
+  --topbar-height:    56px;
+
+  /* Shadows */
+  --shadow-sm:        0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md:        0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg:        0 8px 24px rgba(0,0,0,0.4);
+}
+
+* {
+  box-sizing: border-box;
+  /* Default border-color jadi --border supaya `border-b` tanpa explicit color
+     tidak fallback ke browser default (currentColor = putih di dark mode). */
+  border-color: var(--border);
+}
+
+/* Table reset — Tailwind base masih ada quirk dengan table border collapse */
+table { border-collapse: collapse; }
+table th, table td { border-color: var(--border); }
+
+/* Subtle row divider (40% dari --border, precomputed dari #1e3a5f) */
+.row-divider {
+  border-bottom: 1px solid rgba(30, 58, 95, 0.4);
+}
+
+html, body {
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  min-height: 100vh;
+}
+
+/* Subtle grid background — sama seperti local web */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(59,130,246,0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(59,130,246,0.03) 1px, transparent 1px);
+  background-size: 40px 40px;
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Tailwind utility supaya text gradient bekerja konsisten */
+.text-gradient {
+  background: linear-gradient(135deg, #f1f5f9, var(--accent-cyan));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}

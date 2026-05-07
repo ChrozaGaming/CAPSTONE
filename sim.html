@@ -1,0 +1,1899 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>VisionInspect — Photobox 3D Simulator</title>
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Instrument+Serif:ital@0;1&family=Geist:wght@300;400;500;600;700&display=swap");
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      :root {
+        --bg-deep: #050608;
+        --bg-mid: #0d1014;
+        --bg-elev: rgba(20, 24, 32, 0.72);
+        --accent: #d6f661;
+        --accent-glow: rgba(214, 246, 97, 0.35);
+        --hot: #ff5e3a;
+        --cool: #4ec9ff;
+        --gold: #f4c47e;
+        --line: rgba(255, 255, 255, 0.06);
+        --line-bright: rgba(255, 255, 255, 0.12);
+        --text: #f4f5f7;
+        --text-mute: #8a8e96;
+        --text-faint: #4a4e56;
+      }
+
+      html,
+      body {
+        background: var(--bg-deep);
+        color: var(--text);
+        font-family: "Geist", sans-serif;
+        overflow: hidden;
+        height: 100%;
+        width: 100%;
+      }
+
+      body::before {
+        content: "";
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 200;
+        opacity: 0.04;
+        background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='200' height='200'><filter id='n'><feTurbulence baseFrequency='0.9' numOctaves='2'/></filter><rect width='200' height='200' filter='url(%23n)' opacity='1'/></svg>");
+        mix-blend-mode: overlay;
+      }
+
+      #scene-container {
+        position: fixed;
+        inset: 0;
+        background:
+          radial-gradient(
+            ellipse 80% 60% at 50% 100%,
+            rgba(76, 105, 140, 0.08) 0%,
+            transparent 50%
+          ),
+          radial-gradient(
+            ellipse 60% 80% at 50% 0%,
+            rgba(20, 30, 45, 0.5) 0%,
+            transparent 60%
+          ),
+          linear-gradient(180deg, #08090c 0%, #050608 100%);
+      }
+
+      .header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        z-index: 100;
+        padding: 28px 36px;
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        pointer-events: none;
+      }
+
+      .brand-mark {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+      }
+
+      .brand-symbol {
+        width: 36px;
+        height: 36px;
+        border: 1px solid var(--line-bright);
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.02);
+        backdrop-filter: blur(20px);
+        position: relative;
+      }
+
+      .brand-symbol::after {
+        content: "";
+        position: absolute;
+        inset: 6px;
+        border: 1px solid var(--accent);
+        border-radius: 50%;
+        opacity: 0.6;
+      }
+
+      .brand-symbol::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 12px var(--accent-glow);
+      }
+
+      .brand-text {
+        line-height: 1.1;
+      }
+
+      .brand-text .eyebrow {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        letter-spacing: 0.2em;
+        color: var(--text-mute);
+        text-transform: uppercase;
+        margin-bottom: 4px;
+      }
+
+      .brand-text h1 {
+        font-family: "Instrument Serif", serif;
+        font-size: 28px;
+        font-weight: 400;
+        letter-spacing: -0.01em;
+        color: var(--text);
+      }
+
+      .brand-text h1 em {
+        color: var(--accent);
+        font-style: italic;
+      }
+
+      .meta {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 6px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        letter-spacing: 0.15em;
+        color: var(--text-mute);
+        text-transform: uppercase;
+      }
+
+      .meta .live {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--text);
+      }
+
+      .meta .live::before {
+        content: "";
+        width: 6px;
+        height: 6px;
+        background: var(--accent);
+        border-radius: 50%;
+        box-shadow: 0 0 8px var(--accent);
+        animation: pulse 1.6s ease-in-out infinite;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
+          transform: scale(1);
+        }
+        50% {
+          opacity: 0.4;
+          transform: scale(1.4);
+        }
+      }
+
+      .panel {
+        position: fixed;
+        z-index: 100;
+        background: var(--bg-elev);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        overflow: hidden;
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.04) inset,
+          0 30px 80px rgba(0, 0, 0, 0.5),
+          0 8px 30px rgba(0, 0, 0, 0.3);
+      }
+
+      .panel-header {
+        padding: 16px 20px 12px;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .panel-title {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+        letter-spacing: 0.25em;
+        color: var(--text-mute);
+        text-transform: uppercase;
+      }
+
+      .panel-icon {
+        width: 16px;
+        height: 16px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: var(--accent);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+      }
+
+      .panel-body {
+        padding: 12px 20px 16px;
+      }
+
+      .info-panel {
+        top: 130px;
+        left: 36px;
+        width: 290px;
+      }
+      .legend-panel {
+        top: 130px;
+        right: 36px;
+        width: 270px;
+      }
+
+      .row {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        padding: 9px 0;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+        font-family: "Geist", sans-serif;
+        font-size: 12px;
+      }
+
+      .row:last-child {
+        border-bottom: none;
+      }
+      .row-label {
+        color: var(--text-mute);
+        font-weight: 400;
+      }
+      .row-value {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--text);
+        font-weight: 500;
+      }
+      .row.accent .row-value {
+        color: var(--accent);
+      }
+      .row.warm .row-value {
+        color: var(--gold);
+      }
+
+      /* ─── Section sub-divider ─── */
+      .panel-section {
+        padding: 12px 0 4px;
+        margin-top: 4px;
+        border-top: 1px solid var(--line);
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+      }
+      .panel-section-title {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+        letter-spacing: 0.25em;
+        color: var(--accent);
+        text-transform: uppercase;
+      }
+      .panel-section-icon {
+        color: var(--accent);
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+      }
+
+      /* ─── Sliders ─── */
+      .slider-row {
+        padding: 12px 0 6px;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+      }
+      .slider-row:last-child {
+        border-bottom: none;
+      }
+
+      .slider-label {
+        display: flex;
+        justify-content: space-between;
+        align-items: baseline;
+        margin-bottom: 8px;
+        font-size: 12px;
+      }
+      .slider-label-text {
+        color: var(--text-mute);
+      }
+      .slider-value {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 11px;
+        color: var(--accent);
+        font-weight: 600;
+      }
+
+      input[type="range"] {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 100%;
+        height: 4px;
+        background: linear-gradient(
+          90deg,
+          var(--accent) 0%,
+          var(--accent) var(--fill, 50%),
+          rgba(255, 255, 255, 0.08) var(--fill, 50%),
+          rgba(255, 255, 255, 0.08) 100%
+        );
+        border-radius: 2px;
+        outline: none;
+        cursor: pointer;
+        transition: background 0.1s;
+      }
+      input[type="range"]::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 16px;
+        height: 16px;
+        background: var(--text);
+        border-radius: 50%;
+        cursor: grab;
+        box-shadow:
+          0 0 0 3px var(--bg-mid),
+          0 0 0 4px var(--accent),
+          0 4px 12px rgba(214, 246, 97, 0.4);
+        transition: transform 0.15s ease;
+      }
+      input[type="range"]::-webkit-slider-thumb:active {
+        transform: scale(1.2);
+        cursor: grabbing;
+      }
+      input[type="range"]::-moz-range-thumb {
+        width: 16px;
+        height: 16px;
+        background: var(--text);
+        border: 0;
+        border-radius: 50%;
+        cursor: grab;
+        box-shadow:
+          0 0 0 3px var(--bg-mid),
+          0 0 0 4px var(--accent),
+          0 4px 12px rgba(214, 246, 97, 0.4);
+      }
+
+      .slider-ticks {
+        display: flex;
+        justify-content: space-between;
+        margin-top: 6px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+        color: var(--text-faint);
+        letter-spacing: 0.05em;
+      }
+
+      .legend-item {
+        display: flex;
+        align-items: center;
+        padding: 9px 0;
+        border-bottom: 1px dashed rgba(255, 255, 255, 0.04);
+        font-size: 12px;
+        color: var(--text-mute);
+      }
+      .legend-item:last-child {
+        border-bottom: none;
+      }
+      .swatch {
+        width: 18px;
+        height: 18px;
+        border-radius: 4px;
+        margin-right: 14px;
+        flex-shrink: 0;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        position: relative;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3) inset;
+      }
+      .swatch.accent {
+        box-shadow: 0 0 12px rgba(214, 246, 97, 0.4);
+      }
+      .swatch.cool {
+        box-shadow: 0 0 12px rgba(78, 201, 255, 0.4);
+      }
+      .swatch.hot {
+        box-shadow: 0 0 12px rgba(255, 94, 58, 0.4);
+      }
+      .swatch.gold {
+        box-shadow: 0 0 12px rgba(244, 196, 126, 0.4);
+      }
+
+      .controls {
+        position: fixed;
+        bottom: 36px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 100;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        padding: 8px;
+        background: var(--bg-elev);
+        backdrop-filter: blur(24px) saturate(180%);
+        -webkit-backdrop-filter: blur(24px) saturate(180%);
+        border: 1px solid var(--line);
+        border-radius: 60px;
+        box-shadow:
+          0 1px 0 rgba(255, 255, 255, 0.04) inset,
+          0 30px 80px rgba(0, 0, 0, 0.5);
+      }
+      .btn {
+        background: transparent;
+        border: none;
+        color: var(--text-mute);
+        padding: 11px 20px;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        cursor: pointer;
+        border-radius: 50px;
+        transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+        font-weight: 500;
+        position: relative;
+      }
+      .btn:hover {
+        color: var(--text);
+        background: rgba(255, 255, 255, 0.04);
+      }
+      .btn.active {
+        background: var(--accent);
+        color: var(--bg-deep);
+        box-shadow:
+          0 0 0 1px rgba(0, 0, 0, 0.1),
+          0 4px 20px var(--accent-glow);
+      }
+      .btn.active:hover {
+        background: var(--accent);
+        color: var(--bg-deep);
+      }
+      .btn-divider {
+        width: 1px;
+        height: 18px;
+        background: var(--line-bright);
+        margin: 0 4px;
+      }
+
+      .hint {
+        position: fixed;
+        bottom: 36px;
+        right: 36px;
+        z-index: 100;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 9px;
+        color: var(--text-faint);
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+        text-align: right;
+        line-height: 1.8;
+      }
+      .hint kbd {
+        color: var(--accent);
+        font-family: inherit;
+      }
+
+      .metrics {
+        position: fixed;
+        bottom: 36px;
+        left: 36px;
+        z-index: 100;
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        color: var(--text-mute);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+        line-height: 1.8;
+      }
+      .metrics .label {
+        color: var(--text-faint);
+      }
+      .metrics .value {
+        color: var(--text);
+      }
+
+      .loading {
+        position: fixed;
+        inset: 0;
+        background: var(--bg-deep);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 300;
+        flex-direction: column;
+        gap: 24px;
+        transition: opacity 0.6s ease;
+      }
+      .loading.hidden {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .loading-spinner {
+        width: 40px;
+        height: 40px;
+        border: 2px solid var(--line);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      .loading-text {
+        font-family: "JetBrains Mono", monospace;
+        font-size: 10px;
+        letter-spacing: 0.3em;
+        color: var(--text-mute);
+        text-transform: uppercase;
+      }
+
+      .vignette {
+        position: fixed;
+        inset: 0;
+        pointer-events: none;
+        z-index: 50;
+        background: radial-gradient(
+          ellipse at center,
+          transparent 50%,
+          rgba(0, 0, 0, 0.4) 100%
+        );
+      }
+
+      @media (max-width: 900px) {
+        .info-panel,
+        .legend-panel {
+          display: none;
+        }
+        .header {
+          padding: 18px 20px;
+        }
+        .brand-text h1 {
+          font-size: 20px;
+        }
+        .controls {
+          padding: 6px;
+          gap: 2px;
+          flex-wrap: wrap;
+          max-width: 90vw;
+          bottom: 20px;
+        }
+        .btn {
+          padding: 8px 12px;
+          font-size: 9px;
+        }
+        .hint,
+        .metrics {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div class="loading" id="loading">
+      <div class="loading-spinner"></div>
+      <div class="loading-text">Initializing 3D scene</div>
+    </div>
+
+    <div id="scene-container"></div>
+    <div class="vignette"></div>
+
+    <header class="header">
+      <div class="brand-mark">
+        <div class="brand-symbol"></div>
+        <div class="brand-text">
+          <div class="eyebrow">CAPSTONE A3 · KELOMPOK 2</div>
+          <h1>Vision<em>Inspect</em> · Photobox</h1>
+        </div>
+      </div>
+      <div class="meta">
+        <div class="live">REAL-TIME PREVIEW</div>
+        <div>PT.IEI · EJIP CIKARANG</div>
+      </div>
+    </header>
+
+    <aside class="panel info-panel">
+      <div class="panel-header">
+        <span class="panel-title">Geometry / Specs</span>
+        <span class="panel-icon">◐</span>
+      </div>
+      <div class="panel-body">
+        <div class="row">
+          <span class="row-label">Photobox</span>
+          <span class="row-value">30 × 30 × 30 cm</span>
+        </div>
+        <div class="row warm">
+          <span class="row-label">LED 5500K</span>
+          <span class="row-value">108 ×</span>
+        </div>
+        <div class="row">
+          <span class="row-label">Reference</span>
+          <span class="row-value">KTP ISO 7810</span>
+        </div>
+        <div class="row">
+          <span class="row-label">Camera</span>
+          <span class="row-value">iPhone</span>
+        </div>
+
+        <div class="panel-section">
+          <span class="panel-section-title">Configuration</span>
+          <span class="panel-section-icon">◇</span>
+        </div>
+
+        <div class="slider-row">
+          <div class="slider-label">
+            <span class="slider-label-text">Hole diameter</span>
+            <span class="slider-value" id="val-hole">15.0 cm</span>
+          </div>
+          <input
+            type="range"
+            id="slider-hole"
+            min="3"
+            max="20"
+            step="0.5"
+            value="15"
+          />
+          <div class="slider-ticks">
+            <span>3</span>
+            <span>20 cm</span>
+          </div>
+        </div>
+
+        <div class="slider-row">
+          <div class="slider-label">
+            <span class="slider-label-text">Camera distance</span>
+            <span class="slider-value" id="val-dist">10.0 cm</span>
+          </div>
+          <input
+            type="range"
+            id="slider-dist"
+            min="3"
+            max="30"
+            step="0.5"
+            value="10"
+          />
+          <div class="slider-ticks">
+            <span>3</span>
+            <span>30 cm</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <aside class="panel legend-panel">
+      <div class="panel-header">
+        <span class="panel-title">Components</span>
+        <span class="panel-icon">◇</span>
+      </div>
+      <div class="panel-body">
+        <div class="legend-item">
+          <span
+            class="swatch"
+            style="background: linear-gradient(135deg, #f8f8f3, #e0e0d8)"
+          ></span>
+          Photobox panels
+        </div>
+        <div class="legend-item">
+          <span
+            class="swatch"
+            style="background: linear-gradient(135deg, #2a2c30, #0e0f12)"
+          ></span>
+          Tripod aluminum
+        </div>
+        <div class="legend-item">
+          <span
+            class="swatch gold"
+            style="background: linear-gradient(135deg, #fff5d6, #e0c490)"
+          ></span>
+          LED strip 5500K
+        </div>
+        <div class="legend-item">
+          <span
+            class="swatch"
+            style="background: linear-gradient(135deg, #2a2728, #15131a)"
+          ></span>
+          iPhone Pro Max
+        </div>
+        <div class="legend-item">
+          <span
+            class="swatch cool"
+            style="background: linear-gradient(135deg, #4ec9ff, #1a6080)"
+          ></span>
+          Camera FOV cone
+        </div>
+        <div class="legend-item">
+          <span
+            class="swatch hot"
+            style="background: linear-gradient(135deg, #ff5e3a, #a02818)"
+          ></span>
+          Inspection target
+        </div>
+      </div>
+    </aside>
+
+    <div class="metrics">
+      <div>
+        <span class="label">CAM Y :</span>
+        <span class="value" id="m-cam-y">—</span>
+      </div>
+      <div>
+        <span class="label">VIEW :</span>
+        <span class="value" id="m-view">orbit</span>
+      </div>
+      <div>
+        <span class="label">FPS :</span> <span class="value" id="m-fps">—</span>
+      </div>
+    </div>
+
+    <div class="controls">
+      <button class="btn active" id="btn-orbit">Orbit</button>
+      <button class="btn" id="btn-top">Top</button>
+      <button class="btn" id="btn-side">Side</button>
+      <button class="btn" id="btn-front">Front</button>
+      <span class="btn-divider"></span>
+      <button class="btn active" id="btn-fov">FOV</button>
+      <button class="btn active" id="btn-rotate">Auto-rotate</button>
+    </div>
+
+    <div class="hint">
+      <div><kbd>Drag</kbd> · orbit</div>
+      <div><kbd>Scroll</kbd> · zoom</div>
+      <div><kbd>Right-drag</kbd> · pan</div>
+    </div>
+
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.module.js"
+        }
+      }
+    </script>
+
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/controls/OrbitControls.js";
+
+      // ============================================================
+      //  CONFIGURATION (mutable, controlled by sliders)
+      // ============================================================
+      const config = {
+        holeDiameter: 15.0, // cm
+        cameraDistance: 10.0, // cm above top panel
+      };
+
+      // ============================================================
+      //  CONSTANTS
+      // ============================================================
+      const BOX_SIZE = 30;
+      const PANEL_THICK = 0.4;
+      const HALF = BOX_SIZE / 2;
+      const TOP_PANEL_Y = BOX_SIZE;
+
+      const TRIPOD_LEG_BASE_RADIUS = 32;
+      const APEX_X_OFFSET = 28;
+
+      // ============================================================
+      //  SCENE SETUP
+      // ============================================================
+      const container = document.getElementById("scene-container");
+      const scene = new THREE.Scene();
+      scene.fog = new THREE.FogExp2(0x050608, 0.0042);
+
+      const camera = new THREE.PerspectiveCamera(
+        38,
+        window.innerWidth / window.innerHeight,
+        0.1,
+        800,
+      );
+      camera.position.set(95, 55, 100);
+
+      const renderer = new THREE.WebGLRenderer({
+        antialias: true,
+        alpha: false,
+        powerPreference: "high-performance",
+      });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+      renderer.toneMapping = THREE.ACESFilmicToneMapping;
+      renderer.toneMappingExposure = 1.0;
+      renderer.outputEncoding = THREE.sRGBEncoding;
+      container.appendChild(renderer.domElement);
+
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.enableDamping = true;
+      controls.dampingFactor = 0.05;
+      controls.minDistance = 35;
+      controls.maxDistance = 200;
+      controls.target.set(0, 22, 0);
+      controls.autoRotate = true;
+      controls.autoRotateSpeed = 0.35;
+
+      // ============================================================
+      //  LIGHTING
+      // ============================================================
+      const hemiLight = new THREE.HemisphereLight(0x445566, 0x080a0c, 0.4);
+      scene.add(hemiLight);
+
+      const keyLight = new THREE.DirectionalLight(0xfff0d9, 0.85);
+      keyLight.position.set(60, 90, 50);
+      keyLight.castShadow = true;
+      keyLight.shadow.mapSize.set(2048, 2048);
+      keyLight.shadow.camera.left = -70;
+      keyLight.shadow.camera.right = 70;
+      keyLight.shadow.camera.top = 70;
+      keyLight.shadow.camera.bottom = -70;
+      keyLight.shadow.camera.near = 0.5;
+      keyLight.shadow.camera.far = 250;
+      keyLight.shadow.bias = -0.0005;
+      keyLight.shadow.radius = 4;
+      scene.add(keyLight);
+
+      const fillLight = new THREE.DirectionalLight(0x6080a0, 0.25);
+      fillLight.position.set(-50, 40, -30);
+      scene.add(fillLight);
+
+      const rimLight = new THREE.DirectionalLight(0xd6f661, 0.18);
+      rimLight.position.set(-30, 25, -60);
+      scene.add(rimLight);
+
+      const followLight = new THREE.PointLight(0xfff5e0, 0.3, 100, 1.5);
+      scene.add(followLight);
+
+      // ============================================================
+      //  GROUND
+      // ============================================================
+      const groundGeo = new THREE.PlaneGeometry(400, 400);
+      const groundMat = new THREE.MeshStandardMaterial({
+        color: 0x14100c,
+        roughness: 0.95,
+        metalness: 0.02,
+      });
+      const ground = new THREE.Mesh(groundGeo, groundMat);
+      ground.rotation.x = -Math.PI / 2;
+      ground.position.y = 0;
+      ground.receiveShadow = true;
+      scene.add(ground);
+
+      const plankGroup = new THREE.Group();
+      for (let i = -180; i <= 180; i += 10) {
+        const plankGeo = new THREE.PlaneGeometry(400, 0.18);
+        const plankMat = new THREE.MeshBasicMaterial({
+          color: 0x05030a,
+          transparent: true,
+          opacity: 0.5,
+        });
+        const plank = new THREE.Mesh(plankGeo, plankMat);
+        plank.rotation.x = -Math.PI / 2;
+        plank.position.set(0, 0.015, i);
+        plankGroup.add(plank);
+      }
+      scene.add(plankGroup);
+
+      const groundGlow = new THREE.Mesh(
+        new THREE.CircleGeometry(50, 64),
+        new THREE.MeshBasicMaterial({
+          color: 0xfff0d9,
+          transparent: true,
+          opacity: 0.04,
+        }),
+      );
+      groundGlow.rotation.x = -Math.PI / 2;
+      groundGlow.position.y = 0.02;
+      scene.add(groundGlow);
+
+      // ============================================================
+      //  PHOTOBOX
+      // ============================================================
+      const photoboxGroup = new THREE.Group();
+      photoboxGroup.position.y = HALF;
+
+      const panelMat = new THREE.MeshStandardMaterial({
+        color: 0xf5f5f0,
+        roughness: 0.78,
+        metalness: 0.0,
+        side: THREE.DoubleSide,
+      });
+
+      const innerMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff,
+        roughness: 0.92,
+        metalness: 0.0,
+        emissive: 0xfff5d6,
+        emissiveIntensity: 0.22,
+        side: THREE.DoubleSide,
+      });
+
+      // — TOP PANEL (rebuildable) ——
+      let topPanelMesh = null;
+
+      function rebuildTopPanel(holeDiam) {
+        if (topPanelMesh) {
+          photoboxGroup.remove(topPanelMesh);
+          topPanelMesh.geometry.dispose();
+        }
+
+        const shape = new THREE.Shape();
+        shape.moveTo(-HALF, -HALF);
+        shape.lineTo(HALF, -HALF);
+        shape.lineTo(HALF, HALF);
+        shape.lineTo(-HALF, HALF);
+        shape.lineTo(-HALF, -HALF);
+
+        const holeR = holeDiam / 2;
+        const hole = new THREE.Path();
+        hole.absarc(0, 0, holeR, 0, Math.PI * 2, false);
+        shape.holes.push(hole);
+
+        const geo = new THREE.ExtrudeGeometry(shape, {
+          depth: PANEL_THICK,
+          bevelEnabled: false,
+          curveSegments: 64,
+        });
+        topPanelMesh = new THREE.Mesh(geo, panelMat);
+        topPanelMesh.rotation.x = -Math.PI / 2;
+        topPanelMesh.position.y = HALF;
+        topPanelMesh.castShadow = true;
+        topPanelMesh.receiveShadow = true;
+        photoboxGroup.add(topPanelMesh);
+      }
+      rebuildTopPanel(config.holeDiameter);
+
+      // — Other panels ——
+      const bottomGeo = new THREE.BoxGeometry(BOX_SIZE, PANEL_THICK, BOX_SIZE);
+      const bottomPanel = new THREE.Mesh(bottomGeo, innerMat);
+      bottomPanel.position.y = -HALF + PANEL_THICK / 2;
+      bottomPanel.receiveShadow = true;
+      photoboxGroup.add(bottomPanel);
+
+      const backGeo = new THREE.BoxGeometry(BOX_SIZE, BOX_SIZE, PANEL_THICK);
+      const backPanel = new THREE.Mesh(backGeo, panelMat);
+      backPanel.position.set(0, 0, -HALF + PANEL_THICK / 2);
+      backPanel.castShadow = true;
+      backPanel.receiveShadow = true;
+      photoboxGroup.add(backPanel);
+
+      const sideGeo = new THREE.BoxGeometry(PANEL_THICK, BOX_SIZE, BOX_SIZE);
+      const leftPanel = new THREE.Mesh(sideGeo, panelMat);
+      leftPanel.position.set(-HALF + PANEL_THICK / 2, 0, 0);
+      leftPanel.castShadow = true;
+      leftPanel.receiveShadow = true;
+      photoboxGroup.add(leftPanel);
+
+      const rightPanel = new THREE.Mesh(sideGeo, panelMat);
+      rightPanel.position.set(HALF - PANEL_THICK / 2, 0, 0);
+      rightPanel.castShadow = true;
+      rightPanel.receiveShadow = true;
+      photoboxGroup.add(rightPanel);
+
+      // Decorative bolts
+      const screwMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1a1a,
+        roughness: 0.3,
+        metalness: 0.85,
+      });
+      const screwGeo = new THREE.CylinderGeometry(0.22, 0.22, 0.55, 14);
+      [
+        [-HALF + 1.4, HALF - 0.4, -HALF + 1.4],
+        [HALF - 1.4, HALF - 0.4, -HALF + 1.4],
+        [-HALF + 1.4, HALF - 0.4, HALF - 1.4],
+        [HALF - 1.4, HALF - 0.4, HALF - 1.4],
+        [-HALF + 1.4, -HALF + 1.4, -HALF + 1.4],
+        [HALF - 1.4, -HALF + 1.4, -HALF + 1.4],
+      ].forEach((p) => {
+        const screw = new THREE.Mesh(screwGeo, screwMat);
+        screw.position.set(p[0], p[1], p[2]);
+        screw.rotation.x = Math.PI / 2;
+        photoboxGroup.add(screw);
+      });
+
+      scene.add(photoboxGroup);
+
+      // ============================================================
+      //  LED STRIPS
+      // ============================================================
+      const ledGroup = new THREE.Group();
+      ledGroup.position.y = TOP_PANEL_Y;
+
+      const ledMat = new THREE.MeshStandardMaterial({
+        color: 0xfff5d6,
+        emissive: 0xfff5d6,
+        emissiveIntensity: 1.8,
+        roughness: 0.4,
+      });
+
+      function rebuildLeds(holeDiam) {
+        // Clear previous LEDs
+        while (ledGroup.children.length) {
+          const child = ledGroup.children[0];
+          ledGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+        }
+        const inset = 1.8;
+        const minDist = holeDiam / 2 + 1.5; // skip LEDs inside hole + small margin
+
+        function addStrip(start, end, count) {
+          for (let i = 0; i <= count; i++) {
+            const t = i / count;
+            const x = start.x + (end.x - start.x) * t;
+            const z = start.z + (end.z - start.z) * t;
+            const distFromCenter = Math.sqrt(x * x + z * z);
+            if (distFromCenter < minDist) continue;
+            const ledGeo = new THREE.SphereGeometry(0.26, 12, 12);
+            const led = new THREE.Mesh(ledGeo, ledMat);
+            led.position.set(x, -0.5, z);
+            ledGroup.add(led);
+          }
+        }
+        addStrip(
+          new THREE.Vector3(-HALF + inset, 0, -HALF + inset),
+          new THREE.Vector3(HALF - inset, 0, -HALF + inset),
+          27,
+        );
+        addStrip(
+          new THREE.Vector3(HALF - inset, 0, -HALF + inset),
+          new THREE.Vector3(HALF - inset, 0, HALF - inset),
+          27,
+        );
+        addStrip(
+          new THREE.Vector3(HALF - inset, 0, HALF - inset),
+          new THREE.Vector3(-HALF + inset, 0, HALF - inset),
+          27,
+        );
+        addStrip(
+          new THREE.Vector3(-HALF + inset, 0, HALF - inset),
+          new THREE.Vector3(-HALF + inset, 0, -HALF + inset),
+          27,
+        );
+      }
+      rebuildLeds(config.holeDiameter);
+      scene.add(ledGroup);
+
+      const internalLight = new THREE.PointLight(0xfff5d6, 1.2, 50, 1.8);
+      internalLight.position.set(0, TOP_PANEL_Y - 4, 0);
+      scene.add(internalLight);
+
+      // ============================================================
+      //  TRIPOD (legs static, arm assembly dynamic)
+      // ============================================================
+      const tripodMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1a1c,
+        roughness: 0.32,
+        metalness: 0.72,
+      });
+      const tripodHighlightMat = new THREE.MeshStandardMaterial({
+        color: 0x2a2c30,
+        roughness: 0.45,
+        metalness: 0.5,
+      });
+
+      // Apex sits HIGH enough to accommodate max camera distance
+      const APEX_Y_FIXED = TOP_PANEL_Y + 30 + 8; // = 68 cm (max cam dist 30 + 8 clearance)
+      const APEX = new THREE.Vector3(APEX_X_OFFSET, APEX_Y_FIXED, 0);
+
+      const tripodLegsGroup = new THREE.Group();
+
+      const legAngles = [0, (Math.PI * 2) / 3, (Math.PI * 4) / 3];
+      legAngles.forEach((angle) => {
+        const footX = APEX.x + Math.cos(angle) * TRIPOD_LEG_BASE_RADIUS;
+        const footZ = APEX.z + Math.sin(angle) * TRIPOD_LEG_BASE_RADIUS;
+        const footPos = new THREE.Vector3(footX, 0, footZ);
+
+        const legVec = new THREE.Vector3().subVectors(APEX, footPos);
+        const legLength = legVec.length();
+        const legDir = legVec.clone().normalize();
+
+        const legGeo = new THREE.CylinderGeometry(0.55, 0.4, legLength, 12);
+        const leg = new THREE.Mesh(legGeo, tripodMat);
+
+        const midPoint = new THREE.Vector3()
+          .addVectors(footPos, APEX)
+          .multiplyScalar(0.5);
+        leg.position.copy(midPoint);
+
+        const up = new THREE.Vector3(0, 1, 0);
+        const quat = new THREE.Quaternion().setFromUnitVectors(up, legDir);
+        leg.quaternion.copy(quat);
+        leg.castShadow = true;
+        tripodLegsGroup.add(leg);
+
+        const footGeo = new THREE.CylinderGeometry(0.85, 1.3, 0.9, 16);
+        const footMat = new THREE.MeshStandardMaterial({
+          color: 0x0a0a0c,
+          roughness: 0.85,
+          metalness: 0.1,
+        });
+        const foot = new THREE.Mesh(footGeo, footMat);
+        foot.position.set(footX, 0.45, footZ);
+        foot.castShadow = true;
+        foot.receiveShadow = true;
+        tripodLegsGroup.add(foot);
+
+        const jointPos = new THREE.Vector3()
+          .copy(footPos)
+          .add(legVec.clone().multiplyScalar(0.4));
+        const jointGeo = new THREE.BoxGeometry(1.6, 2.2, 1.6);
+        const joint = new THREE.Mesh(jointGeo, tripodHighlightMat);
+        joint.position.copy(jointPos);
+        joint.quaternion.copy(quat);
+        joint.castShadow = true;
+        tripodLegsGroup.add(joint);
+
+        const knobGeo = new THREE.CylinderGeometry(0.55, 0.55, 1.0, 14);
+        const knob = new THREE.Mesh(knobGeo, tripodHighlightMat);
+        knob.position.copy(jointPos);
+        const perpDir = new THREE.Vector3(-Math.sin(angle), 0, Math.cos(angle));
+        knob.position.add(perpDir.multiplyScalar(1.3));
+        knob.rotation.z = Math.PI / 2;
+        knob.rotation.y = -angle;
+        tripodLegsGroup.add(knob);
+      });
+
+      // Center hub at top of tripod
+      const hubGeo = new THREE.CylinderGeometry(2.2, 2.4, 1.6, 24);
+      const hub = new THREE.Mesh(hubGeo, tripodHighlightMat);
+      hub.position.copy(APEX);
+      hub.castShadow = true;
+      tripodLegsGroup.add(hub);
+
+      const hubTopGeo = new THREE.CylinderGeometry(0.8, 1.0, 1.2, 16);
+      const hubTop = new THREE.Mesh(hubTopGeo, tripodHighlightMat);
+      hubTop.position.set(APEX.x, APEX.y + 1.4, APEX.z);
+      hubTop.castShadow = true;
+      tripodLegsGroup.add(hubTop);
+
+      scene.add(tripodLegsGroup);
+
+      // ============================================================
+      //  TRIPOD ARM ASSEMBLY (dynamic — moves with camera distance)
+      //  Includes: vertical sliding column, horizontal arm, drop arm,
+      //            phone bracket, phone with iPhone Pro Max model
+      // ============================================================
+      const armAssembly = new THREE.Group();
+      scene.add(armAssembly);
+
+      // — Sliding column (vertical, slides on apex column) ——
+      // This represents a clamp on the tripod's vertical post
+      const slideClampGeo = new THREE.CylinderGeometry(1.5, 1.5, 2.5, 20);
+      const slideClamp = new THREE.Mesh(slideClampGeo, tripodHighlightMat);
+      slideClamp.castShadow = true;
+      armAssembly.add(slideClamp);
+
+      // — Horizontal arm (extends from apex over hole) ——
+      const ARM_LENGTH = APEX_X_OFFSET;
+      const armGeo = new THREE.BoxGeometry(ARM_LENGTH, 1.4, 1.4);
+      const arm = new THREE.Mesh(armGeo, tripodMat);
+      arm.castShadow = true;
+      armAssembly.add(arm);
+
+      // — Arm clamp at apex side ——
+      const clamp1Geo = new THREE.BoxGeometry(2.0, 2.0, 2.0);
+      const clamp1 = new THREE.Mesh(clamp1Geo, tripodHighlightMat);
+      clamp1.castShadow = true;
+      armAssembly.add(clamp1);
+
+      // — Tightening knob ——
+      const armKnobGeo = new THREE.CylinderGeometry(0.6, 0.6, 1.4, 14);
+      const armKnob = new THREE.Mesh(armKnobGeo, tripodHighlightMat);
+      armKnob.rotation.x = Math.PI / 2;
+      armAssembly.add(armKnob);
+
+      // — Vertical drop arm (from arm end down to phone) ——
+      const dropArmGeo = new THREE.BoxGeometry(0.9, 1, 0.9); // height set dynamically
+      const dropArm = new THREE.Mesh(dropArmGeo, tripodMat);
+      dropArm.castShadow = true;
+      armAssembly.add(dropArm);
+
+      // — Phone bracket (clamps onto phone) ——
+      const bracketGeo = new THREE.BoxGeometry(3.0, 1.6, 3.0);
+      const bracketMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1c20,
+        roughness: 0.45,
+        metalness: 0.5,
+      });
+      const bracket = new THREE.Mesh(bracketGeo, bracketMat);
+      bracket.castShadow = true;
+      armAssembly.add(bracket);
+
+      // ============================================================
+      //  iPHONE PRO MAX MODEL
+      //  phoneGroup origin = MAIN CAMERA LENS center (will be at world 0,0)
+      //  Phone body, screen, and camera island offset from this origin
+      // ============================================================
+      const phoneGroup = new THREE.Group();
+      armAssembly.add(phoneGroup);
+
+      // iPhone 15/16 Pro Max approximate dimensions (cm):
+      const PH_W = 7.7; // width
+      const PH_L = 16.0; // length (long axis)
+      const PH_T = 0.83; // thickness
+
+      // Camera island position on phone (top-left of back when looking at back):
+      //   The island is roughly 3.6 × 3.6 cm, positioned at top-left with margins
+      //   Main lens (largest) is at bottom-left of island
+      //
+      // Phone-local frame: +x = right, +z = toward bottom of phone, +y = up (away from box)
+      // We want main lens (0,0,0) → phone body must be offset so that lens position
+      // in world matches lens position on phone
+      //
+      // Camera island center (on back of phone): x ≈ -1.4, z ≈ -5.5 from phone center
+      // Within island, main lens is at: x ≈ -0.95, z ≈ +0.95 from island center
+      // So main lens position from phone center: x = -1.4 - 0.95 = -2.35, z = -5.5 + 0.95 = -4.55
+      //
+      // To put main lens at (0,0): phone center must be at (+2.35, ?, +4.55)
+      const PHONE_CENTER_OFFSET_X = 2.35;
+      const PHONE_CENTER_OFFSET_Z = 4.55;
+
+      // Phone body — back face (camera side) faces DOWN (-y in world)
+      // Body bottom (y) at phone group's y level (lens housing protrudes below this)
+      const PHONE_BODY_BOTTOM_Y = 0.18; // back face at y=0.18 (housing protrudes 0.18 below)
+      const PHONE_BODY_CENTER_Y = PHONE_BODY_BOTTOM_Y + PH_T / 2;
+
+      const phoneBodyGeo = new THREE.BoxGeometry(PH_W, PH_T, PH_L);
+      const phoneBodyMat = new THREE.MeshStandardMaterial({
+        color: 0x18191c, // matte titanium dark
+        roughness: 0.35,
+        metalness: 0.7,
+      });
+      const phoneBody = new THREE.Mesh(phoneBodyGeo, phoneBodyMat);
+      phoneBody.position.set(
+        PHONE_CENTER_OFFSET_X,
+        PHONE_BODY_CENTER_Y,
+        PHONE_CENTER_OFFSET_Z,
+      );
+      phoneBody.castShadow = true;
+      phoneBody.receiveShadow = true;
+      phoneGroup.add(phoneBody);
+
+      // Phone screen (top surface, +y face)
+      const screenGeo = new THREE.PlaneGeometry(PH_W * 0.92, PH_L * 0.93);
+      const screenMat = new THREE.MeshStandardMaterial({
+        color: 0x080a10,
+        emissive: 0x0a3050,
+        emissiveIntensity: 0.55,
+        roughness: 0.05,
+        metalness: 0.0,
+      });
+      const screen = new THREE.Mesh(screenGeo, screenMat);
+      screen.position.set(
+        PHONE_CENTER_OFFSET_X,
+        PHONE_BODY_CENTER_Y + PH_T / 2 + 0.005,
+        PHONE_CENTER_OFFSET_Z,
+      );
+      screen.rotation.x = -Math.PI / 2;
+      phoneGroup.add(screen);
+
+      // Viewfinder rectangle on screen (live preview indicator)
+      const viewfinderGeo = new THREE.PlaneGeometry(5.2, 7.5);
+      const viewfinderMat = new THREE.MeshBasicMaterial({
+        color: 0xd6f661,
+        transparent: true,
+        opacity: 0.12,
+        side: THREE.DoubleSide,
+      });
+      const viewfinder = new THREE.Mesh(viewfinderGeo, viewfinderMat);
+      viewfinder.position.set(
+        PHONE_CENTER_OFFSET_X,
+        PHONE_BODY_CENTER_Y + PH_T / 2 + 0.012,
+        PHONE_CENTER_OFFSET_Z + 1.5,
+      );
+      viewfinder.rotation.x = -Math.PI / 2;
+      phoneGroup.add(viewfinder);
+
+      const vfEdges = new THREE.EdgesGeometry(viewfinderGeo);
+      const vfBorder = new THREE.LineSegments(
+        vfEdges,
+        new THREE.LineBasicMaterial({ color: 0xd6f661 }),
+      );
+      vfBorder.position.copy(viewfinder.position);
+      vfBorder.rotation.copy(viewfinder.rotation);
+      phoneGroup.add(vfBorder);
+
+      // ============================================================
+      //  CAMERA ISLAND (back of phone, top-left area)
+      // ============================================================
+      // Island center in phone-local: (-1.4, body bottom, -5.5)
+      // In world (with phone offset applied): island center at
+      //   (PHONE_CENTER_OFFSET_X + (-1.4), 0.05 below body bottom, PHONE_CENTER_OFFSET_Z + (-5.5))
+      //   = (0.95, body_bottom - 0.05, -0.95)
+      // Wait: phone_center_in_world = (2.35, _, 4.55) + island_local (-1.4, _, -5.5)
+      //   = (2.35 - 1.4, _, 4.55 - 5.5) = (0.95, _, -0.95)
+      // So island center is at (0.95, _, -0.95) in world. Main lens within island
+      // is at world (0, 0, 0). Distance from island center to main lens: (-0.95, _, 0.95)
+      //
+      // That's correct: main lens is in the bottom-left quadrant of island.
+      const ISLAND_SIZE = 3.6;
+      const ISLAND_CENTER_X = PHONE_CENTER_OFFSET_X - 1.4; // = 0.95
+      const ISLAND_CENTER_Z = PHONE_CENTER_OFFSET_Z - 5.5; // = -0.95
+      const ISLAND_TOP_Y = PHONE_BODY_BOTTOM_Y; // top of island = bottom of body
+      const ISLAND_HEIGHT = 0.35; // protrudes 0.35cm
+      const ISLAND_BOTTOM_Y = ISLAND_TOP_Y - ISLAND_HEIGHT;
+
+      const islandMat = new THREE.MeshStandardMaterial({
+        color: 0x222428,
+        roughness: 0.4,
+        metalness: 0.65,
+      });
+      const islandGeo = new THREE.BoxGeometry(
+        ISLAND_SIZE,
+        ISLAND_HEIGHT,
+        ISLAND_SIZE,
+      );
+      const island = new THREE.Mesh(islandGeo, islandMat);
+      island.position.set(
+        ISLAND_CENTER_X,
+        ISLAND_BOTTOM_Y + ISLAND_HEIGHT / 2,
+        ISLAND_CENTER_Z,
+      );
+      island.castShadow = true;
+      phoneGroup.add(island);
+
+      // Inner darker bevel ring on island (visual depth)
+      const islandInnerGeo = new THREE.PlaneGeometry(
+        ISLAND_SIZE - 0.4,
+        ISLAND_SIZE - 0.4,
+      );
+      const islandInnerMat = new THREE.MeshStandardMaterial({
+        color: 0x0e1014,
+        roughness: 0.55,
+        metalness: 0.4,
+      });
+      const islandInner = new THREE.Mesh(islandInnerGeo, islandInnerMat);
+      islandInner.position.set(
+        ISLAND_CENTER_X,
+        ISLAND_BOTTOM_Y - 0.001,
+        ISLAND_CENTER_Z,
+      );
+      islandInner.rotation.x = Math.PI / 2;
+      phoneGroup.add(islandInner);
+
+      // ============================================================
+      //  THREE LENSES + LiDAR + FLASH (on camera island)
+      // ============================================================
+      // Lens positions WITHIN island (relative to island center):
+      //   Main wide (largest):     bottom-left   (-0.95, +0.95)
+      //   Ultrawide:               top-left      (-0.95, -0.95)
+      //   Telephoto:               top-right     (+0.95, -0.95)
+      //   LiDAR sensor (square):   bottom-right  (+0.95, +0.95)
+      //   Flash (small circle):    middle-right  (+0.95, 0)
+      //
+      // Translated to world coords (add ISLAND_CENTER_X, ISLAND_CENTER_Z):
+      //   Main wide:    (0.95-0.95, _, -0.95+0.95) = (0, _, 0) ← centered on hole ✓
+      //   Ultrawide:    (0.95-0.95, _, -0.95-0.95) = (0, _, -1.9)
+      //   Telephoto:    (0.95+0.95, _, -0.95-0.95) = (1.9, _, -1.9)
+      //   LiDAR:        (0.95+0.95, _, -0.95+0.95) = (1.9, _, 0)
+      //   Flash:        (0.95+0.95, _, -0.95) = (1.9, _, -0.95)
+
+      const LENS_Y_GLASS = ISLAND_BOTTOM_Y - 0.01; // glass at very bottom of housing
+      const LENS_Y_HOUSING_TOP = LENS_Y_GLASS + 0.18; // housing protrudes 0.18 below island
+
+      // Reusable function for lens
+      function makeLens(
+        x,
+        z,
+        lensRadius,
+        glassColor = 0x000000,
+        withRing = true,
+      ) {
+        // Outer metallic ring
+        const ringMat = new THREE.MeshStandardMaterial({
+          color: 0x4a4d52,
+          roughness: 0.25,
+          metalness: 0.95,
+        });
+        const housingGeo = new THREE.CylinderGeometry(
+          lensRadius * 1.3,
+          lensRadius * 1.4,
+          0.18,
+          28,
+        );
+        const housing = new THREE.Mesh(housingGeo, ringMat);
+        housing.position.set(x, LENS_Y_GLASS + 0.09, z);
+        housing.castShadow = true;
+        phoneGroup.add(housing);
+
+        // Inner bezel (darker)
+        const bezelGeo = new THREE.CylinderGeometry(
+          lensRadius * 1.1,
+          lensRadius * 1.1,
+          0.2,
+          28,
+        );
+        const bezelMat = new THREE.MeshStandardMaterial({
+          color: 0x0a0a0c,
+          roughness: 0.55,
+          metalness: 0.7,
+        });
+        const bezel = new THREE.Mesh(bezelGeo, bezelMat);
+        bezel.position.set(x, LENS_Y_GLASS + 0.1, z);
+        phoneGroup.add(bezel);
+
+        // Glass element (deep black with subtle blue iridescence)
+        const glassGeo = new THREE.CircleGeometry(lensRadius * 0.92, 32);
+        const glassMat = new THREE.MeshStandardMaterial({
+          color: glassColor,
+          roughness: 0.0,
+          metalness: 1.0,
+          emissive: 0x001525,
+          emissiveIntensity: 0.4,
+        });
+        const glass = new THREE.Mesh(glassGeo, glassMat);
+        glass.position.set(x, LENS_Y_GLASS - 0.005, z);
+        glass.rotation.x = Math.PI / 2;
+        phoneGroup.add(glass);
+
+        // Subtle reflection ring
+        if (withRing) {
+          const reflGeo = new THREE.RingGeometry(
+            lensRadius * 0.7,
+            lensRadius * 0.85,
+            32,
+          );
+          const reflMat = new THREE.MeshBasicMaterial({
+            color: 0x4ec9ff,
+            transparent: true,
+            opacity: 0.35,
+            side: THREE.DoubleSide,
+          });
+          const refl = new THREE.Mesh(reflGeo, reflMat);
+          refl.position.set(x, LENS_Y_GLASS - 0.01, z);
+          refl.rotation.x = Math.PI / 2;
+          phoneGroup.add(refl);
+        }
+      }
+
+      // Main wide lens — LARGEST, centered on hole (world 0,0,0)
+      makeLens(0, 0, 0.95);
+
+      // Ultrawide lens — top-left of island
+      makeLens(0, -1.9, 0.75);
+
+      // Telephoto lens — top-right of island
+      makeLens(1.9, -1.9, 0.78);
+
+      // LiDAR sensor — bottom-right (square-ish dark)
+      const lidarGeo = new THREE.BoxGeometry(0.7, 0.18, 0.7);
+      const lidarMat = new THREE.MeshStandardMaterial({
+        color: 0x1a1d20,
+        roughness: 0.4,
+        metalness: 0.7,
+      });
+      const lidar = new THREE.Mesh(lidarGeo, lidarMat);
+      lidar.position.set(1.9, LENS_Y_GLASS + 0.09, 0);
+      phoneGroup.add(lidar);
+
+      // Inner LiDAR pattern (darker square)
+      const lidarInnerGeo = new THREE.PlaneGeometry(0.42, 0.42);
+      const lidarInnerMat = new THREE.MeshStandardMaterial({
+        color: 0x000206,
+        roughness: 0.0,
+        metalness: 1.0,
+        emissive: 0x002030,
+        emissiveIntensity: 0.3,
+      });
+      const lidarInner = new THREE.Mesh(lidarInnerGeo, lidarInnerMat);
+      lidarInner.position.set(1.9, LENS_Y_GLASS - 0.005, 0);
+      lidarInner.rotation.x = Math.PI / 2;
+      phoneGroup.add(lidarInner);
+
+      // Flash — small bright element, middle-right
+      const flashOuterGeo = new THREE.CylinderGeometry(0.32, 0.32, 0.16, 20);
+      const flashOuter = new THREE.Mesh(
+        flashOuterGeo,
+        new THREE.MeshStandardMaterial({
+          color: 0x2a2d32,
+          roughness: 0.4,
+          metalness: 0.5,
+        }),
+      );
+      flashOuter.position.set(1.9, LENS_Y_GLASS + 0.08, -0.95);
+      phoneGroup.add(flashOuter);
+
+      const flashInnerGeo = new THREE.CircleGeometry(0.22, 20);
+      const flashInnerMat = new THREE.MeshBasicMaterial({ color: 0xfff5e0 });
+      const flashInner = new THREE.Mesh(flashInnerGeo, flashInnerMat);
+      flashInner.position.set(1.9, LENS_Y_GLASS - 0.005, -0.95);
+      flashInner.rotation.x = Math.PI / 2;
+      phoneGroup.add(flashInner);
+
+      // Apple logo in center of phone back (subtle)
+      const logoGeo = new THREE.CircleGeometry(0.55, 24);
+      const logoMat = new THREE.MeshStandardMaterial({
+        color: 0x1f2125,
+        roughness: 0.3,
+        metalness: 0.8,
+      });
+      const logo = new THREE.Mesh(logoGeo, logoMat);
+      logo.position.set(
+        PHONE_CENTER_OFFSET_X,
+        PHONE_BODY_BOTTOM_Y + 0.005,
+        PHONE_CENTER_OFFSET_Z + 0.5,
+      );
+      logo.rotation.x = Math.PI / 2;
+      phoneGroup.add(logo);
+
+      // Phone holder clamps (gripping left + right edges of body)
+      const clampMat = new THREE.MeshStandardMaterial({
+        color: 0x2a2c30,
+        roughness: 0.55,
+        metalness: 0.4,
+      });
+      const clampLeftX = PHONE_CENTER_OFFSET_X - PH_W / 2 - 0.4;
+      const clampRightX = PHONE_CENTER_OFFSET_X + PH_W / 2 + 0.4;
+      [clampLeftX, clampRightX].forEach((x) => {
+        const clampGeo = new THREE.BoxGeometry(0.7, 1.7, 4.5);
+        const clamp = new THREE.Mesh(clampGeo, clampMat);
+        clamp.position.set(x, PHONE_BODY_CENTER_Y, PHONE_CENTER_OFFSET_Z);
+        clamp.castShadow = true;
+        phoneGroup.add(clamp);
+      });
+
+      // ============================================================
+      //  FOV CONE (rebuildable based on phone Y)
+      // ============================================================
+      let fovGroup = new THREE.Group();
+      scene.add(fovGroup);
+
+      function rebuildFovCone(phoneY) {
+        while (fovGroup.children.length) {
+          const child = fovGroup.children[0];
+          fovGroup.remove(child);
+          if (child.geometry) child.geometry.dispose();
+        }
+
+        const FOV_TOP_Y = phoneY - 0.3;
+        const FOV_BOTTOM_Y = PANEL_THICK;
+        const FOV_HEIGHT = FOV_TOP_Y - FOV_BOTTOM_Y;
+        const FOV_BOTTOM_RADIUS = 17;
+
+        const fovConeGeo = new THREE.ConeGeometry(
+          FOV_BOTTOM_RADIUS,
+          FOV_HEIGHT,
+          48,
+          1,
+          true,
+        );
+        const fovConeMat = new THREE.MeshBasicMaterial({
+          color: 0x4ec9ff,
+          transparent: true,
+          opacity: 0.06,
+          side: THREE.DoubleSide,
+          depthWrite: false,
+        });
+        const fovCone = new THREE.Mesh(fovConeGeo, fovConeMat);
+        fovCone.position.set(0, (FOV_TOP_Y + FOV_BOTTOM_Y) / 2, 0);
+        fovCone.rotation.x = Math.PI;
+        fovCone.userData.isConeMat = true;
+        fovGroup.add(fovCone);
+
+        const wireGeo = new THREE.ConeGeometry(
+          FOV_BOTTOM_RADIUS,
+          FOV_HEIGHT,
+          16,
+          1,
+          true,
+        );
+        const edges = new THREE.EdgesGeometry(wireGeo);
+        const wireMat = new THREE.LineBasicMaterial({
+          color: 0x4ec9ff,
+          transparent: true,
+          opacity: 0.45,
+        });
+        const fovWire = new THREE.LineSegments(edges, wireMat);
+        fovWire.position.copy(fovCone.position);
+        fovWire.rotation.copy(fovCone.rotation);
+        fovGroup.add(fovWire);
+
+        const projGeo = new THREE.RingGeometry(
+          FOV_BOTTOM_RADIUS - 0.18,
+          FOV_BOTTOM_RADIUS,
+          64,
+        );
+        const projMat = new THREE.MeshBasicMaterial({
+          color: 0x4ec9ff,
+          transparent: true,
+          opacity: 0.7,
+          side: THREE.DoubleSide,
+        });
+        const proj = new THREE.Mesh(projGeo, projMat);
+        proj.position.set(0, FOV_BOTTOM_Y + 0.06, 0);
+        proj.rotation.x = -Math.PI / 2;
+        proj.userData.isProjMat = true;
+        fovGroup.add(proj);
+
+        const axisPoints = [];
+        for (let y = FOV_TOP_Y; y > FOV_BOTTOM_Y; y -= 1.2) {
+          axisPoints.push(new THREE.Vector3(0, y, 0));
+        }
+        const axisGeo = new THREE.BufferGeometry().setFromPoints(axisPoints);
+        const axisMat = new THREE.PointsMaterial({
+          color: 0x4ec9ff,
+          size: 0.32,
+          transparent: true,
+          opacity: 0.7,
+        });
+        const axis = new THREE.Points(axisGeo, axisMat);
+        fovGroup.add(axis);
+      }
+
+      // ============================================================
+      //  INSPECTION TARGET (KTP)
+      // ============================================================
+      const targetGroup = new THREE.Group();
+      const KTP_W = 8.56;
+      const KTP_H = 5.398;
+      const KTP_T = 0.08;
+      const ktpGeo = new THREE.BoxGeometry(KTP_W, KTP_T, KTP_H);
+      const ktpMat = new THREE.MeshStandardMaterial({
+        color: 0xb8d4e0,
+        roughness: 0.32,
+        metalness: 0.0,
+      });
+      const ktp = new THREE.Mesh(ktpGeo, ktpMat);
+      ktp.position.set(0, PANEL_THICK + KTP_T / 2, 0);
+      ktp.castShadow = true;
+      ktp.receiveShadow = true;
+      targetGroup.add(ktp);
+
+      const outlineGeo = new THREE.EdgesGeometry(ktpGeo);
+      const outline = new THREE.LineSegments(
+        outlineGeo,
+        new THREE.LineBasicMaterial({ color: 0xff5e3a }),
+      );
+      outline.position.copy(ktp.position);
+      targetGroup.add(outline);
+
+      const pulseGeo = new THREE.SphereGeometry(0.25, 16, 16);
+      const pulseMat = new THREE.MeshBasicMaterial({
+        color: 0xff5e3a,
+        transparent: true,
+        opacity: 1.0,
+      });
+      const pulse = new THREE.Mesh(pulseGeo, pulseMat);
+      pulse.position.set(0, PANEL_THICK + KTP_T + 0.3, 0);
+      targetGroup.add(pulse);
+
+      scene.add(targetGroup);
+
+      // ============================================================
+      //  GRID
+      // ============================================================
+      const grid = new THREE.GridHelper(220, 44, 0x1a2030, 0x0c1018);
+      grid.position.y = 0.025;
+      scene.add(grid);
+
+      // ============================================================
+      //  UPDATE FUNCTION — repositions arm assembly + phone + FOV
+      //  when camera distance changes
+      // ============================================================
+      function updateCameraDistance(distance) {
+        const phoneY = TOP_PANEL_Y + distance; // y-position where main lens sits
+        const phoneTopY = phoneY + PH_T + 0.18; // top of phone body (above lens housing)
+        const armY = phoneTopY + 1.5; // horizontal arm sits 1.5cm above phone top
+        const slideY = (armY + APEX.y) / 2; // slide clamp midway between arm and apex
+
+        // Phone group Y (origin = main lens at (0, phoneY, 0))
+        phoneGroup.position.set(0, phoneY, 0);
+
+        // Slide clamp on tripod column (travels up/down)
+        slideClamp.position.set(APEX.x, slideY, APEX.z);
+        // Make slide clamp height fit between arm and apex
+        const slideHeight = Math.max(2.5, APEX.y - armY + 1);
+        slideClamp.scale.y = slideHeight / 2.5;
+
+        // Horizontal arm (always at armY, extends from apex.x to 0)
+        arm.position.set(APEX.x - ARM_LENGTH / 2, armY, APEX.z);
+
+        // Arm clamp at apex side
+        clamp1.position.set(APEX.x - 1.2, armY, APEX.z);
+
+        // Knob on clamp
+        armKnob.position.set(APEX.x - 1.2, armY, APEX.z + 1.6);
+
+        // Drop arm: from armY down to phone top
+        const dropLen = armY - phoneTopY;
+        if (dropLen > 0) {
+          dropArm.scale.y = dropLen; // BoxGeometry was created with height 1
+          dropArm.position.set(0, (armY + phoneTopY) / 2, 0);
+          dropArm.visible = true;
+        } else {
+          dropArm.visible = false;
+        }
+
+        // Phone bracket
+        bracket.position.set(0, phoneTopY + 0.3, 0);
+
+        // Rebuild FOV cone for new phoneY
+        rebuildFovCone(phoneY);
+      }
+
+      updateCameraDistance(config.cameraDistance);
+
+      // ============================================================
+      //  SLIDER UI
+      // ============================================================
+      const sliderHole = document.getElementById("slider-hole");
+      const sliderDist = document.getElementById("slider-dist");
+      const valHole = document.getElementById("val-hole");
+      const valDist = document.getElementById("val-dist");
+
+      function updateSliderFill(slider) {
+        const min = parseFloat(slider.min);
+        const max = parseFloat(slider.max);
+        const val = parseFloat(slider.value);
+        const pct = ((val - min) / (max - min)) * 100;
+        slider.style.setProperty("--fill", pct + "%");
+      }
+
+      [sliderHole, sliderDist].forEach(updateSliderFill);
+
+      sliderHole.addEventListener("input", (e) => {
+        const v = parseFloat(e.target.value);
+        config.holeDiameter = v;
+        valHole.textContent = v.toFixed(1) + " cm";
+        rebuildTopPanel(v);
+        rebuildLeds(v);
+        updateSliderFill(e.target);
+      });
+
+      sliderDist.addEventListener("input", (e) => {
+        const v = parseFloat(e.target.value);
+        config.cameraDistance = v;
+        valDist.textContent = v.toFixed(1) + " cm";
+        updateCameraDistance(v);
+        updateSliderFill(e.target);
+      });
+
+      // ============================================================
+      //  VIEW BUTTONS
+      // ============================================================
+      const btnOrbit = document.getElementById("btn-orbit");
+      const btnTop = document.getElementById("btn-top");
+      const btnSide = document.getElementById("btn-side");
+      const btnFront = document.getElementById("btn-front");
+      const btnFov = document.getElementById("btn-fov");
+      const btnRotate = document.getElementById("btn-rotate");
+      const viewBtns = [btnOrbit, btnTop, btnSide, btnFront];
+      const mView = document.getElementById("m-view");
+
+      function setActiveView(activeBtn, name) {
+        viewBtns.forEach((b) => b.classList.remove("active"));
+        activeBtn.classList.add("active");
+        mView.textContent = name;
+      }
+
+      function animateCamera(target, lookTarget, duration = 1100) {
+        const startPos = camera.position.clone();
+        const startTarget = controls.target.clone();
+        const startTime = performance.now();
+        function step() {
+          const elapsed = performance.now() - startTime;
+          const t = Math.min(elapsed / duration, 1);
+          const e = t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+          camera.position.lerpVectors(startPos, target, e);
+          controls.target.lerpVectors(startTarget, lookTarget, e);
+          if (t < 1) requestAnimationFrame(step);
+        }
+        step();
+      }
+
+      btnOrbit.addEventListener("click", () => {
+        animateCamera(
+          new THREE.Vector3(95, 55, 100),
+          new THREE.Vector3(0, 22, 0),
+        );
+        setActiveView(btnOrbit, "orbit");
+      });
+      btnTop.addEventListener("click", () => {
+        animateCamera(
+          new THREE.Vector3(0, 130, 0.1),
+          new THREE.Vector3(0, 0, 0),
+        );
+        setActiveView(btnTop, "top");
+      });
+      btnSide.addEventListener("click", () => {
+        animateCamera(
+          new THREE.Vector3(130, 35, 0),
+          new THREE.Vector3(0, 30, 0),
+        );
+        setActiveView(btnSide, "side");
+      });
+      btnFront.addEventListener("click", () => {
+        animateCamera(
+          new THREE.Vector3(0, 32, 130),
+          new THREE.Vector3(0, 25, 0),
+        );
+        setActiveView(btnFront, "front");
+      });
+
+      btnFov.addEventListener("click", () => {
+        fovGroup.visible = !fovGroup.visible;
+        btnFov.classList.toggle("active");
+      });
+
+      btnRotate.addEventListener("click", () => {
+        controls.autoRotate = !controls.autoRotate;
+        btnRotate.classList.toggle("active");
+      });
+
+      // ============================================================
+      //  RESPONSIVE
+      // ============================================================
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+      });
+
+      // ============================================================
+      //  RENDER LOOP
+      // ============================================================
+      const mCamY = document.getElementById("m-cam-y");
+      const mFps = document.getElementById("m-fps");
+      let lastFrame = performance.now();
+      let fpsAcc = 0,
+        fpsCount = 0;
+      let time = 0;
+
+      function render() {
+        const now = performance.now();
+        const dt = now - lastFrame;
+        lastFrame = now;
+        fpsAcc += 1000 / dt;
+        fpsCount++;
+        if (fpsCount >= 30) {
+          mFps.textContent = (fpsAcc / fpsCount).toFixed(0);
+          fpsAcc = 0;
+          fpsCount = 0;
+        }
+
+        time += 0.016;
+
+        // Pulsing FOV materials
+        if (fovGroup.visible) {
+          fovGroup.children.forEach((child) => {
+            if (child.material) {
+              if (child.userData.isConeMat) {
+                child.material.opacity = 0.045 + 0.025 * Math.sin(time * 1.6);
+              } else if (child.userData.isProjMat) {
+                child.material.opacity = 0.55 + 0.18 * Math.sin(time * 1.6);
+              }
+            }
+          });
+        }
+
+        pulse.scale.setScalar(1 + 0.3 * Math.sin(time * 3));
+        pulseMat.opacity = 0.6 + 0.4 * Math.abs(Math.sin(time * 3));
+        internalLight.intensity = 1.18 + Math.sin(time * 12) * 0.04;
+
+        followLight.position.copy(camera.position);
+        controls.update();
+        renderer.render(scene, camera);
+        mCamY.textContent = `${camera.position.y.toFixed(1)} cm`;
+
+        requestAnimationFrame(render);
+      }
+
+      setTimeout(() => {
+        document.getElementById("loading").classList.add("hidden");
+      }, 600);
+
+      render();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,89 @@
+/* ====================================================================
+   theme.css — Shared Design Tokens
+   Capstone A3 Kelompok 2 · Filkom Universitas Brawijaya
+
+   Single source of truth untuk warna, typography, spacing, radius,
+   transitions. Dipakai oleh:
+     - Local web (vanilla index.html + style.css) — saat ini
+     - VPS Next.js dashboard — masa depan, di-mirror ke tailwind.config.ts
+       lewat CSS variable references supaya kedua sisi visually identik.
+
+   PRINSIP:
+   - Hanya CSS custom properties di sini.
+   - Tidak ada selector spesifik atau component styling.
+   - Untuk "swappable theme" kedepan (light mode dll.), tinggal duplikat
+     :root jadi [data-theme="dark"] / [data-theme="light"].
+   ==================================================================== */
+
+:root {
+  /* ── Background layers ────────────────────────────────────────────── */
+  --bg-primary:       #0a0e1a;     /* page background */
+  --bg-secondary:     #111827;     /* slightly elevated */
+  --bg-card:          #1a2235;     /* cards, panels */
+  --bg-card-hover:    #1e293b;     /* card hover state */
+  --bg-sidebar:       #0d1424;     /* sidebar bg, slightly darker than card */
+  --bg-topbar:        #0f172a;     /* topbar bg */
+
+  /* ── Borders ──────────────────────────────────────────────────────── */
+  --border:           #1e3a5f;
+  --border-light:     #2d4a6e;     /* hover/focus border */
+
+  /* ── Accents ──────────────────────────────────────────────────────── */
+  --accent-blue:      #3b82f6;
+  --accent-blue-glow: #3b82f630;
+  --accent-cyan:      #06b6d4;
+  --accent-cyan-glow: #06b6d430;
+
+  /* ── Status (OK / NG) ─────────────────────────────────────────────── */
+  --ok-primary:       #10b981;
+  --ok-glow:          #10b98130;
+  --ok-bg:            #064e3b20;
+  --ng-primary:       #ef4444;
+  --ng-glow:          #ef444430;
+  --ng-bg:            #7f1d1d20;
+
+  /* ── Role accent (untuk badge sidebar header) ─────────────────────── */
+  --role-operator:    #06b6d4;     /* cyan — operator */
+  --role-supervisor:  #3b82f6;     /* blue — supervisor */
+  --role-manager:     #a855f7;     /* purple — manager */
+
+  /* ── Text colors ──────────────────────────────────────────────────── */
+  --text-primary:     #f1f5f9;
+  --text-secondary:   #94a3b8;
+  --text-muted:       #475569;
+
+  /* Aliases supaya component existing tetap bekerja
+     (style.css existing pakai --text-main; pertahankan) */
+  --text-main:        #e2e8f0;     /* sedikit dimmer dari primary */
+
+  /* ── Typography ───────────────────────────────────────────────────── */
+  --font-sans:        'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:        'JetBrains Mono', 'SF Mono', Menlo, 'Courier New', monospace;
+
+  /* ── Spacing & radius ─────────────────────────────────────────────── */
+  --radius-sm:        8px;
+  --radius-md:        12px;
+  --radius-lg:        16px;
+  --radius-xl:        24px;
+
+  /* ── Layout sizes ─────────────────────────────────────────────────── */
+  --sidebar-width:    240px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height:    56px;
+
+  /* ── Transitions ──────────────────────────────────────────────────── */
+  --transition:       0.2s ease;
+  --transition-slow:  0.4s ease;
+
+  /* ── Shadows ──────────────────────────────────────────────────────── */
+  --shadow-sm:        0 1px 2px rgba(0,0,0,0.2);
+  --shadow-md:        0 4px 12px rgba(0,0,0,0.3);
+  --shadow-lg:        0 8px 24px rgba(0,0,0,0.4);
+
+  /* ── Z-index scale ────────────────────────────────────────────────── */
+  --z-sidebar:        40;
+  --z-topbar:         50;
+  --z-dropdown:       60;
+  --z-modal:          80;
+  --z-toast:          100;
+}

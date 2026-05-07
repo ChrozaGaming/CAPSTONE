@@ -63,6 +63,37 @@ import json
 import select
 from collections import deque
 
+# ── Optional live streaming module (web dashboard kamera + keybind web) ──
+# Pipeline kalibrasi/masking tidak terpengaruh — kalau modul tidak tersedia
+# atau gagal init, edge tetap jalan normal dengan window OpenCV saja.
+_STREAM_OK = False
+try:
+    import stream as _stream
+    _STREAM_OK = _stream.start()
+except Exception as _stream_err:
+    print(f"[STREAM] disabled — {_stream_err}")
+
+
+def _stream_publish(frame):
+    """Push frame ke web stream kalau aktif. Dipakai di wizard, notice,
+    confirm dialog — supaya semua tahapan visible di web, bukan cuma main
+    inspection loop."""
+    if _STREAM_OK:
+        try:
+            _stream.publish(frame)
+        except Exception:
+            pass
+
+
+def _stream_poll_key():
+    """Return int ord dari keybind web atau None. No-op kalau stream off."""
+    if _STREAM_OK:
+        try:
+            return _stream.poll_key()
+        except Exception:
+            return None
+    return None
+
 # Optional: rembg for high-quality ML segmentation. Falls back to dominant-color
 # K-means if not installed. Install: pip install rembg onnxruntime
 REMBG_AVAILABLE = False
@@ -563,7 +594,13 @@ def _wizard_phase_ktp(cap, win):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.45, cfg.C_GRAY, 1, cv2.LINE_AA)
 
         cv2.imshow(win, ann)
+        _stream_publish(ann)  # kirim frame wizard ke web supaya proses kalibrasi visible
         key = cv2.waitKey(1) & 0xFF
+        # Accept keybind dari web (SPACE / ESC) saat wizard berjalan
+        if key in (255, 0):
+            web_k = _stream_poll_key()
+            if web_k is not None:
+                key = web_k
 
         if key == 27:
             return None
@@ -599,9 +636,21 @@ def _wizard_phase_ktp(cap, win):
                         (ox + 14, oy + 165),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.55, cfg.C_OK, 1, cv2.LINE_AA)
             cv2.imshow(win, confirm)
+            _stream_publish(confirm)  # confirm dialog visible di web
 
+            # Polling loop (bukan blocking waitKey(0)) supaya:
+            #  (a) frame confirm tetap re-publish ke web kalau client baru connect
+            #  (b) keybind Y / N / ESC dari web bisa diterima
             while True:
-                k2 = cv2.waitKey(0) & 0xFF
+                k2 = cv2.waitKey(50) & 0xFF
+                if k2 in (255, 0):
+                    web_k = _stream_poll_key()
+                    if web_k is not None:
+                        k2 = web_k
+                    else:
+                        # Re-publish confirm dialog supaya late-connect client tetap lihat
+                        _stream_publish(confirm)
+                        continue
                 if k2 in (ord("y"), ord("Y")):
                     # Cross-calibrate via measurement pipeline AVERAGED over
                     # multiple frames. Single-frame ppmm is sensitive to rembg
@@ -618,6 +667,7 @@ def _wizard_phase_ktp(cap, win):
                                 (w_f // 2 - 280, h_f - 36),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.6, cfg.C_YELLOW, 2, cv2.LINE_AA)
                     cv2.imshow(win, busy)
+                    _stream_publish(busy)
                     cv2.waitKey(1)
 
                     # Collect rembg measurements across N frames
@@ -2304,6 +2354,7 @@ def main():
                 cv2.LINE_AA,
             )
             cv2.imshow(WIN, notice)
+            _stream_publish(notice)
             cv2.waitKey(1)
             name = prompt_object_name(sL, sW, catalog)
             if name:
@@ -2330,7 +2381,21 @@ def main():
             ref_present=ref_present,
         )
         cv2.imshow(WIN, display)
+
+        # ── Stream hook: push annotated frame ke web dashboard (kalau aktif) ──
+        if _STREAM_OK:
+            try:
+                _stream.publish(display)
+            except Exception:
+                pass
+
         key = cv2.waitKey(1) & 0xFF
+
+        # Kalau tidak ada keypress fisik (255 atau 0), cek keybind dari web
+        if _STREAM_OK and key in (255, 0):
+            web_key = _stream.poll_key()
+            if web_key is not None:
+                key = web_key
 
         # ── Keys ──
         if key in (ord("q"), ord("Q"), 27):
@@ -2387,6 +2452,7 @@ def main():
                     cv2.LINE_AA,
                 )
                 cv2.imshow(WIN, notice)
+                _stream_publish(notice)
                 cv2.waitKey(1)
                 name = prompt_object_name(sL, sW, catalog)
                 if name:

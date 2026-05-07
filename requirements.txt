@@ -26,3 +26,9 @@ requests>=2.31.0
 # First call downloads u2netp.onnx (~5 MB) to ~/.u2net/ cache.
 rembg>=2.0.50
 onnxruntime>=1.17.0
+
+# ── Live streaming module (web dashboard kamera + keybind) ─────────────
+# stream/ package: WSPublisher (port 8765) + WSControl (port 8766).
+# Pure-Python WebSocket — no native deps. Optional: pipeline tetap jalan
+# tanpa modul ini (stream akan disabled dengan warning).
+websockets>=12.0
