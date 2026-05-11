@@ -96,6 +96,56 @@ def _stream_poll_key():
 
 # Optional: rembg for high-quality ML segmentation. Falls back to dominant-color
 # K-means if not installed. Install: pip install rembg onnxruntime
+#
+# Model cache di ./models/rembg/ (bukan ~/.u2net/) — supaya tidak download ulang
+# kalau pindah mesin, dan model travels with the repo. Env var di-set SEBELUM
+# import rembg karena rembg/pooch baca env var saat init.
+_PROJECT_DIR = os.path.dirname(os.path.abspath(__file__))
+_REMBG_CACHE_DIR = os.path.join(_PROJECT_DIR, "models", "rembg")
+os.makedirs(_REMBG_CACHE_DIR, exist_ok=True)
+os.environ.setdefault("U2NET_HOME", _REMBG_CACHE_DIR)
+
+# Default model: isnet-general-use (~178MB) — sweet spot accuracy/speed di Mac
+# CPU. Edge mendekati remove.bg, well-tested (2022), stabil frame-to-frame jadi
+# pengukuran tidak flicker. Override via env REMBG_MODEL — pilihan lain:
+#   u2netp                  (~5MB,   Raspberry Pi / low-disk, edge kasar)
+#   birefnet-general-lite   (~178MB, edge lebih halus tapi lebih lambat di CPU)
+#   birefnet-general        (~880MB, SOTA — butuh GPU untuk real-time)
+REMBG_MODEL_NAME = os.environ.get("REMBG_MODEL", "isnet-general-use")
+# Alpha matting: refinement step buat tepi mask halus & tepat sasaran (mirip
+# remove.bg pada objek dengan kontur kompleks). Cost: 3-5x lebih lambat per
+# frame, tapi sub-pixel edge positioning → contour final lebih presisi setelah
+# threshold ke biner. Default ON untuk akurasi pengukuran maksimum.
+# Disable via REMBG_ALPHA_MATTING=0 kalau butuh FPS tinggi (preview real-time
+# di Pi) atau buat debug perbedaan mask binary vs matting.
+REMBG_ALPHA_MATTING = os.environ.get("REMBG_ALPHA_MATTING", "1") not in ("0", "false", "False", "")
+
+# Inference downsampling: rembg internally resize ke 320×320 (isnet) atau
+# 1024×1024 (birefnet) anyway — feed 1920×1080 cuma buang waktu di preprocess.
+# Default downsample ke 768 long side → 3-5x lebih cepat, mask di-upscale balik
+# ke full resolution untuk measurement (akurasi pengukuran tetap, edge sedikit
+# lebih halus karena hilang noise high-freq). Set =0 untuk native resolution.
+REMBG_INFERENCE_MAX_SIDE = int(os.environ.get("REMBG_INFERENCE_MAX_SIDE", "768"))
+# Async worker: jalanin rembg di background thread biar main loop render di
+# camera FPS (30) tidak blocking. Default ON. Set =0 untuk synchronous (debug).
+REMBG_ASYNC = os.environ.get("REMBG_ASYNC", "1") not in ("0", "false", "False", "")
+
+# Shadow removal: rembg sering include cast shadow di mask karena shadow
+# visually connected ke base objek + lebih gelap dari surrounding. Post-process
+# mask dengan chromaticity test: pixel di tepi mask yang HS-nya lebih dekat ke
+# background daripada ke object's core = bayangan, di-remove. Default ON.
+REMBG_SHADOW_REMOVAL = os.environ.get("REMBG_SHADOW_REMOVAL", "1") not in ("0", "false", "False", "")
+
+# Execution provider — pilih backend onnxruntime untuk akselerasi hardware:
+#   auto    → platform-based: Mac=CoreML(ANE), Win=DirectML(GPU), else=CPU
+#   cpu     → force CPU (works everywhere, paling stabil tapi paling lambat)
+#   coreml  → Apple Neural Engine (M-series Mac). 2-3x speedup vs CPU
+#   dml     → DirectML untuk Windows GPU (any vendor). 3-5x speedup
+#             Butuh: pip install onnxruntime-directml (replace onnxruntime)
+#   cuda    → NVIDIA GPU. Butuh: pip install onnxruntime-gpu (replace onnxruntime)
+# Kalau requested provider tidak tersedia, fallback ke CPU dengan warning.
+REMBG_PROVIDER = os.environ.get("REMBG_PROVIDER", "auto").lower()
+
 REMBG_AVAILABLE = False
 _rembg_session = None
 try:
@@ -1172,21 +1222,272 @@ def _detect_skin_mask(frame):
     return skin
 
 
+class LoadingProgress:
+    """Animated terminal progress: spinner + milestones + elapsed time.
+
+    Tujuan: kasih user kepastian visual bahwa program lagi processing, bukan
+    freeze. ONNX Runtime tidak expose progress callback untuk session init,
+    jadi pakai pattern milestone: setiap stage punya start/finish jelas dengan
+    spinner di antaranya (update tiap 100ms via background thread).
+
+    Output format:
+        [REMBG] Loading isnet-general-use...
+           ⠴ Initializing ONNX session  3.2s     ← live spinner
+           ✓ Initializing ONNX session  (4.5s)   ← saat selesai
+           ⠼ Warmup inference  0.8s
+           ✓ Warmup inference  (1.1s)
+           → Ready (total: 5.6s)
+
+    Pakai sebagai context manager:
+        with LoadingProgress("[REMBG] Loading model...") as p:
+            p.stage("Initializing")
+            ... slow work ...
+            p.stage("Warmup")
+            ... more work ...
+    """
+
+    SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    BAR_WIDTH = 24
+
+    def __init__(self, title):
+        self._title = title
+        self._stage = None
+        self._stage_t0 = None
+        self._note = ""
+        self._t0 = 0.0
+        self._lock = threading.Lock()
+        self._stop = threading.Event()
+        self._thread = None
+        self._is_tty = False
+
+    def __enter__(self):
+        self._is_tty = sys.stdout.isatty()
+        print(self._title, flush=True)
+        self._t0 = time.time()
+        if self._is_tty:
+            self._thread = threading.Thread(target=self._spin, daemon=True)
+            self._thread.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._finish_stage()
+        self._stop.set()
+        if self._thread:
+            self._thread.join(timeout=0.5)
+        total = time.time() - self._t0
+        sys.stdout.write(f"   → Ready (total: {total:.1f}s)\n")
+        sys.stdout.flush()
+
+    def stage(self, msg):
+        """Mark a new milestone — finishes previous stage and starts a new one."""
+        with self._lock:
+            self._finish_stage_locked()
+            self._stage = msg
+            self._note = ""
+            self._stage_t0 = time.time()
+            if not self._is_tty:
+                # Non-TTY (e.g., piped): just print line; no live update
+                sys.stdout.write(f"   • {msg}...\n")
+                sys.stdout.flush()
+
+    def note(self, msg):
+        """Annotate current stage (e.g., file size, download status)."""
+        with self._lock:
+            self._note = msg
+
+    def _finish_stage(self):
+        with self._lock:
+            self._finish_stage_locked()
+
+    def _finish_stage_locked(self):
+        if self._stage is None:
+            return
+        elapsed = time.time() - self._stage_t0
+        note = f"  ({self._note})" if self._note else ""
+        if self._is_tty:
+            sys.stdout.write("\r\033[K")  # clear current line
+        sys.stdout.write(f"   ✓ {self._stage}{note}  {elapsed:.1f}s\n")
+        sys.stdout.flush()
+        self._stage = None
+
+    def _spin(self):
+        i = 0
+        while not self._stop.is_set():
+            with self._lock:
+                if self._stage is not None:
+                    elapsed = time.time() - self._stage_t0
+                    note = f"  ({self._note})" if self._note else ""
+                    sys.stdout.write(
+                        f"\r   {self.SPINNER[i % len(self.SPINNER)]} {self._stage}{note}  {elapsed:.1f}s"
+                    )
+                    sys.stdout.flush()
+            i += 1
+            self._stop.wait(0.1)
+
+
+_rembg_provider_info = None  # cached (providers_list, display_name) after first call
+
+
+def _select_providers():
+    """Pilih ONNX Runtime execution provider terbaik untuk platform saat ini.
+
+    Strategi auto-mode:
+      • macOS  → CoreML (Neural Engine pada M-series) → CPU fallback
+      • Windows → DirectML (GPU any vendor) → CPU fallback
+      • Linux  → CPU (CUDA/OpenVINO bisa di-opt-in manual)
+
+    Override via REMBG_PROVIDER env var. Kalau provider yang diminta tidak
+    tersedia (mis. user di Windows tapi belum install onnxruntime-directml),
+    silently fallback ke CPU dengan warning. CPU EP selalu tersedia.
+
+    Returns: (providers_list, display_name)
+      providers_list: untuk diteruskan ke rembg.new_session(providers=...)
+      display_name:   string untuk progress bar & banner
+    """
+    global _rembg_provider_info
+    if _rembg_provider_info is not None:
+        return _rembg_provider_info
+
+    try:
+        import onnxruntime as ort
+        available = set(ort.get_available_providers())
+    except Exception:
+        _rembg_provider_info = (["CPUExecutionProvider"], "CPU")
+        return _rembg_provider_info
+
+    def _pick(preferred, label, install_hint=None):
+        if preferred in available:
+            return ([preferred, "CPUExecutionProvider"], label)
+        if install_hint:
+            print(f"  [REMBG] {label} requested tapi tidak tersedia — {install_hint}")
+        return (["CPUExecutionProvider"], "CPU (fallback)")
+
+    if REMBG_PROVIDER == "cpu":
+        info = (["CPUExecutionProvider"], "CPU (forced)")
+    elif REMBG_PROVIDER == "coreml":
+        info = _pick(
+            "CoreMLExecutionProvider", "CoreML (Apple Neural Engine)",
+            install_hint="onnxruntime di Apple Silicon biasanya sudah include CoreML",
+        )
+    elif REMBG_PROVIDER == "dml":
+        info = _pick(
+            "DmlExecutionProvider", "DirectML (Windows GPU)",
+            install_hint="install: pip uninstall onnxruntime && pip install onnxruntime-directml",
+        )
+    elif REMBG_PROVIDER == "cuda":
+        info = _pick(
+            "CUDAExecutionProvider", "CUDA (NVIDIA GPU)",
+            install_hint="install: pip uninstall onnxruntime && pip install onnxruntime-gpu",
+        )
+    else:
+        # auto: platform-based selection
+        if IS_MACOS and "CoreMLExecutionProvider" in available:
+            info = (["CoreMLExecutionProvider", "CPUExecutionProvider"],
+                    "CoreML (Apple Neural Engine)")
+        elif IS_WINDOWS and "DmlExecutionProvider" in available:
+            info = (["DmlExecutionProvider", "CPUExecutionProvider"],
+                    "DirectML (Windows GPU)")
+        elif "CUDAExecutionProvider" in available:
+            info = (["CUDAExecutionProvider", "CPUExecutionProvider"],
+                    "CUDA (NVIDIA GPU)")
+        else:
+            info = (["CPUExecutionProvider"], "CPU")
+
+    _rembg_provider_info = info
+    return info
+
+
 def _get_rembg_session():
-    """Lazy-init rembg ONNX session. u2netp = small/fast (~5MB), enough for capstone."""
+    """Lazy-init rembg ONNX session. Model di-cache ke ./models/rembg/
+    (lihat _REMBG_CACHE_DIR). Silent — messaging handled by preload_rembg_session().
+
+    Execution provider dipilih lewat _select_providers() (platform-aware,
+    override via REMBG_PROVIDER env var). Default model isnet-general-use,
+    override via REMBG_MODEL env var.
+    """
     global _rembg_session
     if _rembg_session is None and REMBG_AVAILABLE:
-        print("  [REMBG] Loading model (first call only, ~5-30s)...")
-        _rembg_session = _rembg_new_session("u2netp")
-        print("  [REMBG] Model ready")
+        providers, _ = _select_providers()
+        _rembg_session = _rembg_new_session(REMBG_MODEL_NAME, providers=providers)
     return _rembg_session
 
 
+def preload_rembg_session():
+    """Eager-load model + warmup inference dengan progress bar visible.
+
+    Dipanggil di main() sebelum camera open: user dapat feedback visual
+    selama 5-15 detik loading time, bukan freeze silent. Warmup inference
+    bayar JIT cost di depan supaya frame pertama di inspection loop tidak
+    lag (saving ~500-1500ms di first frame).
+    """
+    if not REMBG_AVAILABLE:
+        return
+    cached_file = os.path.join(_REMBG_CACHE_DIR, f"{REMBG_MODEL_NAME}.onnx")
+    providers, provider_name = _select_providers()
+    with LoadingProgress(f"[REMBG] Loading {REMBG_MODEL_NAME}...") as p:
+        p.stage("Checking model cache")
+        if os.path.exists(cached_file):
+            size_mb = os.path.getsize(cached_file) / (1024 * 1024)
+            p.note(f"cached: {size_mb:.1f} MB at ./models/rembg/")
+        else:
+            p.note("first run — will download ~178 MB")
+
+        p.stage(f"Initializing ONNX session ({provider_name})")
+        try:
+            _get_rembg_session()
+        except Exception as e:
+            print(f"\n  [REMBG] FAILED to initialize session: {e}")
+            print("          falling back to dominant-color segmentation")
+            return
+
+        p.stage("Warmup inference (pay JIT cost up front)")
+        try:
+            dummy = np.zeros((64, 64, 3), dtype=np.uint8)
+            _rembg_mask(dummy)
+        except Exception as e:
+            p.note(f"warmup skipped: {e}")
+
+        am_status = "alpha-matting ON" if REMBG_ALPHA_MATTING else "alpha-matting off"
+        p.stage(f"Pipeline ready — {am_status}")
+
+
 def _rembg_mask(frame):
-    """High-quality mask via rembg neural net. Returns binary uint8 mask."""
+    """High-quality mask via rembg neural net. Returns binary uint8 mask.
+
+    Kalau REMBG_ALPHA_MATTING=1, dipanggil pipeline alpha-matting (trimap-based
+    edge refinement, mirip remove.bg pada kontur halus seperti rambut/serat
+    plastik). Untuk objek rigid (KTP, panci) gain akurasi marginal — default off.
+    Threshold FG=240 / BG=10 / erode=10 mengikuti rekomendasi rembg untuk
+    general objects.
+    """
     session = _get_rembg_session()
-    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-    raw = _rembg_remove(rgb, session=session, only_mask=True)
+    h0, w0 = frame.shape[:2]
+
+    # Downsample input untuk speed. Mask di-upscale balik ke (w0, h0) supaya
+    # semua downstream processing (skin mask, hull, ppmm) tetap di full
+    # resolution. Inference time turun ~3-5x di 768px vs 1920px.
+    if REMBG_INFERENCE_MAX_SIDE > 0 and max(h0, w0) > REMBG_INFERENCE_MAX_SIDE:
+        s = REMBG_INFERENCE_MAX_SIDE / float(max(h0, w0))
+        inf_frame = cv2.resize(
+            frame, (int(round(w0 * s)), int(round(h0 * s))),
+            interpolation=cv2.INTER_AREA,
+        )
+    else:
+        inf_frame = frame
+
+    rgb = cv2.cvtColor(inf_frame, cv2.COLOR_BGR2RGB)
+    if REMBG_ALPHA_MATTING:
+        raw = _rembg_remove(
+            rgb,
+            session=session,
+            only_mask=True,
+            alpha_matting=True,
+            alpha_matting_foreground_threshold=240,
+            alpha_matting_background_threshold=10,
+            alpha_matting_erode_size=10,
+        )
+    else:
+        raw = _rembg_remove(rgb, session=session, only_mask=True)
     if isinstance(raw, np.ndarray):
         if raw.ndim == 3:
             raw = cv2.cvtColor(raw, cv2.COLOR_RGB2GRAY)
@@ -1194,11 +1495,124 @@ def _rembg_mask(frame):
         raw = np.array(raw)
         if raw.ndim == 3:
             raw = cv2.cvtColor(raw, cv2.COLOR_RGB2GRAY)
+
+    # Upscale mask kembali ke resolusi asli sebelum threshold + morph
+    if raw.shape[:2] != (h0, w0):
+        raw = cv2.resize(raw, (w0, h0), interpolation=cv2.INTER_LINEAR)
+
     _, mask = cv2.threshold(raw, 127, 255, cv2.THRESH_BINARY)
     # Light cleanup (rembg already gives clean mask, but seal small holes)
     k = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, k, iterations=1)
     return mask
+
+
+def _remove_shadow_from_mask(frame, mask):
+    """Hapus cast-shadow dari rembg mask via chromaticity-similarity test.
+
+    Kenapa: rembg sering include cast shadow karena (a) shadow connected ke
+    base objek, (b) shadow lebih gelap dari surrounding → terlihat seperti
+    "salient region" buat model. Untuk pengukuran dimensional, shadow yang
+    ter-include bikin L/W ke-inflated.
+
+    Prinsip deteksi: bayangan pada permukaan punya CHROMATICITY (H+S) yang
+    sama dengan background — cuma di-darken (V turun). Objek punya chromaticity
+    sendiri yang berbeda dari background. Untuk setiap pixel di TEPI mask
+    (boundary, bukan interior), bandingkan jarak HS-nya:
+      • Kalau pixel HS lebih dekat ke background HS (vs object core HS)
+        DAN V lebih rendah dari bg V → ini bayangan, remove dari mask.
+
+    Run BEFORE morphological sealing — kalau jalan sesudah, shadow sudah
+    ke-bake jadi bagian outline solid. Idempotent untuk objek tanpa shadow:
+    boundary pixels HS mirip core (bukan bg) → tidak ada yang di-flag.
+
+    Args:
+        frame: BGR uint8 full-res
+        mask:  uint8 binary mask dari rembg (0/255)
+    Returns:
+        refined mask dengan shadow pixels di-remove
+    """
+    if not np.any(mask):
+        return mask
+
+    # Object core: erode mask cukup banyak supaya core = pure interior objek
+    # (jauh dari edge → tidak ke-kontaminasi shadow atau anti-alias halo)
+    k_erode = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+    core = cv2.erode(mask, k_erode, iterations=2)
+    if not np.any(core):
+        return mask  # mask terlalu thin (mis. KTP flat) — skip shadow check
+
+    # Background ring: dilate mask, subtract original → cincin tipis di luar
+    # mask yang mewakili surrounding background di sekitar objek
+    k_dilate = cv2.getStructuringElement(cv2.MORPH_RECT, (21, 21))
+    dilated = cv2.dilate(mask, k_dilate, iterations=2)
+    ring = cv2.subtract(dilated, mask)
+    if not np.any(ring):
+        return mask  # mask isi seluruh frame — tidak bisa sample bg
+
+    # Boundary zone = pixel di mask tapi BUKAN di core (kandidat shadow)
+    boundary = cv2.subtract(mask, core)
+    if not np.any(boundary):
+        return mask
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV).astype(np.float32)
+
+    def _med(region):
+        pix = hsv[region > 0]
+        return (
+            float(np.median(pix[:, 0])),
+            float(np.median(pix[:, 1])),
+            float(np.median(pix[:, 2])),
+        )
+
+    core_h, core_s, core_v = _med(core)
+    bg_h, bg_s, bg_v = _med(ring)
+
+    # Kalau object & bg sangat mirip di HS, distinction unreliable → skip
+    # (mis. objek putih di meja putih — segmentation sendiri juga sulit)
+    dh_obj_bg = abs(core_h - bg_h)
+    dh_obj_bg = min(dh_obj_bg, 180.0 - dh_obj_bg)
+    obj_bg_hs_gap = (dh_obj_bg * 2.0) ** 2 + (core_s - bg_s) ** 2
+    if obj_bg_hs_gap < 400.0:  # √400 = 20 unit HS — terlalu mirip
+        return mask
+
+    # Per-pixel HS distance ke object core & ke background ring
+    hh = hsv[..., 0]
+    ss = hsv[..., 1]
+    vv = hsv[..., 2]
+
+    def _hs_dist(ref_h, ref_s):
+        dh = np.abs(hh - ref_h)
+        dh = np.minimum(dh, 180.0 - dh)
+        ds = np.abs(ss - ref_s)
+        return np.sqrt((dh * 2.0) ** 2 + ds ** 2)
+
+    d_to_core = _hs_dist(core_h, core_s)
+    d_to_bg = _hs_dist(bg_h, bg_s)
+
+    # Shadow criteria (semua harus terpenuhi):
+    #   1) Pixel di mask boundary (bukan interior)
+    #   2) HS jauh lebih dekat ke bg daripada ke object core
+    #      (d_bg < 60% dari d_core → strong evidence shadow-on-bg, bukan objek)
+    #   3) V lebih rendah dari bg nominal (real cast shadow darkening)
+    shadow = (
+        (boundary > 0)
+        & (d_to_bg < d_to_core * 0.6)
+        & (vv < bg_v * 0.92)
+    )
+
+    if not np.any(shadow):
+        return mask
+
+    refined = mask.copy()
+    refined[shadow] = 0
+
+    # Small open untuk hilangin speckle dari refinement (pixel-by-pixel
+    # decision bisa kasih noise pinggiran), tapi jangan close — close bisa
+    # bridging balik shadow yang baru dihapus.
+    k_open = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
+    refined = cv2.morphologyEx(refined, cv2.MORPH_OPEN, k_open, iterations=1)
+    return refined
 
 
 def _dominant_color_mask(frame, base_threshold):
@@ -1291,6 +1705,10 @@ def extract_measurement(frame, exclude_rect=None, return_mask=False):
     if REMBG_AVAILABLE:
         try:
             cleaned = _rembg_mask(frame)
+            # Hapus cast shadow SEBELUM sealing — kalau sesudah, shadow
+            # sudah ke-bake ke outline solid dan tidak bisa di-remove lagi.
+            if REMBG_SHADOW_REMOVAL:
+                cleaned = _remove_shadow_from_mask(frame, cleaned)
         except Exception as e:
             print(f"  [!] rembg failed ({e}) — falling back to dominant-color")
             cleaned = _dominant_color_mask(frame, cfg.BG_DIFF_THRESHOLD)
@@ -1475,6 +1893,93 @@ def extract_measurement(frame, exclude_rect=None, return_mask=False):
     if return_mask:
         return meas, main_cnt, rect, box_pts, debug_mask
     return meas, main_cnt, rect, box_pts
+
+
+class AsyncMeasurer:
+    """Jalanin extract_measurement di background thread supaya main loop bisa
+    render di camera FPS penuh tanpa block per-frame inference.
+
+    Pola "latest-wins": main loop submit frame terbaru → worker pull frame
+    terakhir (drop frame lama yang belum sempat diproses). Hasilnya overlay
+    pakai mask paling baru yang tersedia — bisa 1-3 frame stale, tapi untuk
+    inspeksi rigid object (objek diam saat diukur) ini invisible.
+
+    Smoother feeding: caller MUST cek `seq` dari latest() vs seq sebelumnya;
+    cuma feed smoother saat seq berubah (hindari duplikat sample yang bikin
+    median window bias).
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._wakeup = threading.Event()
+        self._stop = threading.Event()
+        self._input_frame = None
+        self._input_kwargs = None
+        self._input_seq = 0
+        self._processed_seq = -1
+        self._result = None
+        self._result_seq = -1
+        self._inference_ms = 0.0
+        self._thread = threading.Thread(
+            target=self._run, daemon=True, name="rembg-worker"
+        )
+        self._thread.start()
+
+    def submit(self, frame, exclude_rect=None):
+        """Non-blocking. Replace pending input dengan frame terbaru."""
+        with self._lock:
+            self._input_frame = frame
+            self._input_kwargs = {"exclude_rect": exclude_rect, "return_mask": True}
+            self._input_seq += 1
+        self._wakeup.set()
+
+    def latest(self):
+        """Non-blocking. Return (result_tuple, seq) atau (None, -1).
+        result_tuple = (meas, contour, rect, box_pts, mask). seq monotonic."""
+        with self._lock:
+            if self._result is None:
+                return None, -1
+            return self._result, self._result_seq
+
+    def inference_ms(self):
+        return self._inference_ms
+
+    def stop(self):
+        self._stop.set()
+        self._wakeup.set()
+        self._thread.join(timeout=2.0)
+
+    def _run(self):
+        while not self._stop.is_set():
+            self._wakeup.wait(timeout=0.5)
+            self._wakeup.clear()
+            if self._stop.is_set():
+                break
+            with self._lock:
+                if (
+                    self._input_seq == self._processed_seq
+                    or self._input_frame is None
+                ):
+                    continue
+                # Copy di bawah lock supaya main loop bisa langsung overwrite
+                # _input_frame tanpa mutate data yang lagi dibaca worker.
+                frame = self._input_frame.copy()
+                kwargs = dict(self._input_kwargs)
+                seq = self._input_seq
+            try:
+                t0 = time.time()
+                result = extract_measurement(frame, **kwargs)
+                dt = (time.time() - t0) * 1000.0
+                self._inference_ms = self._inference_ms * 0.7 + dt * 0.3
+            except Exception as e:
+                print(f"  [WORKER] inference error: {e}")
+                with self._lock:
+                    self._processed_seq = seq
+                continue
+            with self._lock:
+                self._result = result
+                self._result_seq = seq
+                self._processed_seq = seq
 
 
 def draw_overlay(frame, meas, contour, box_pts, profile, sL, sW):
@@ -2131,12 +2636,32 @@ def main():
     print("  [R]Register  [L]LiveCal  [U]AutoReg  [/]Cycle  [X]Unlock  [D]Delete  [Q]Quit")
     print(f"  Mode awal  : {'LIVE-CAL (handheld)' if cfg.LIVE_CAL_MODE else 'STATIC (mount)'}")
     if REMBG_AVAILABLE:
-        print("  Segmentasi : rembg (ML, neural network) — high quality")
+        am_str = " + alpha-matting" if REMBG_ALPHA_MATTING else ""
+        ds_str = (
+            f" @{REMBG_INFERENCE_MAX_SIDE}px"
+            if REMBG_INFERENCE_MAX_SIDE > 0
+            else " @native"
+        )
+        async_str = "async (worker thread)" if REMBG_ASYNC else "sync (blocking)"
+        _, provider_name = _select_providers()
+        print(f"  Segmentasi : rembg / {REMBG_MODEL_NAME}{am_str}{ds_str}")
+        print(f"  Provider   : {provider_name}  (override: REMBG_PROVIDER=auto|cpu|coreml|dml|cuda)")
+        print(f"  Pipeline   : {async_str}")
+        print(f"  Model dir  : ./models/rembg/ (cached, tidak download ulang)")
+        print(f"  Override   : REMBG_MODEL=<name>  REMBG_ALPHA_MATTING=1")
+        print(f"               REMBG_INFERENCE_MAX_SIDE=N (0=native)  REMBG_ASYNC=0")
     else:
         print("  Segmentasi : dominant-color K-means (fallback)")
-        print("              install rembg untuk kualitas lebih baik:")
+        print("              install rembg untuk kualitas mirip remove.bg:")
         print("              pip install rembg onnxruntime")
     print("=" * 60)
+
+    # ── Eager pre-load model dengan progress bar ──
+    # Kenapa di-load di sini (sebelum camera open): user dapat feedback visual
+    # selama 5-15 detik loading time (spinner + milestones), bukan menunggu
+    # silently. Warmup inference juga bayar JIT cost di depan supaya frame
+    # pertama di inspection loop tidak lag.
+    preload_rembg_session()
 
     load_calibration()
     catalog = ObjectCatalog()
@@ -2204,6 +2729,18 @@ def main():
             "[!] Catalog empty — register objects with [R] or let auto-register kick in\n"
         )
 
+    # ── Async inference worker: keep main loop di camera FPS (~30) ──
+    # Worker thread jalanin rembg di background; main loop submit frame
+    # terbaru + consume hasil terakhir tanpa block. Display tetap smooth
+    # meski model lambat. Sync mode (REMBG_ASYNC=0) untuk debug.
+    measurer = AsyncMeasurer() if (REMBG_AVAILABLE and REMBG_ASYNC) else None
+    last_consumed_seq = -1
+    if measurer is not None:
+        print(f"  [ASYNC] Worker thread aktif — display FPS independent dari inference")
+
+    # FPS tracker: rolling window of frame timestamps
+    fps_times = deque(maxlen=30)
+
     while True:
         ret, frame = cap.read()
         if not ret or frame is None:
@@ -2234,55 +2771,74 @@ def main():
                     ref_present = True
 
         # ── Measurement + match ──
+        # Async path: submit frame → consume hasil inference terakhir tanpa
+        # block. Smoother cuma di-feed saat seq berubah (mencegah duplikat
+        # sample dari frame yang reuse hasil lama).
         debug_mask = None
         if live_cal_mode and not ref_present:
             # Tidak ada kartu referensi → tidak punya skala valid → skip measurement
             meas, contour, rect, box_pts = None, None, None, None
             smoother.reset()
             unknown_frames = 0
+            last_consumed_seq = -1
+        elif measurer is not None:
+            measurer.submit(frame, exclude_rect=ref_rect)
+            latest, seq = measurer.latest()
+            if latest is not None:
+                meas, contour, rect, box_pts, debug_mask = latest
+                if seq > last_consumed_seq:
+                    last_consumed_seq = seq
+                    if meas is not None:
+                        smoother.add(meas["L_mm"], meas["W_mm"])
+                    else:
+                        smoother.reset()
+                        unknown_frames = 0
+            else:
+                # Worker belum produce hasil (frame pertama-pertama saja)
+                meas, contour, rect, box_pts = None, None, None, None
         else:
             meas, contour, rect, box_pts, debug_mask = extract_measurement(
                 frame, exclude_rect=ref_rect, return_mask=True
             )
-        sL, sW = None, None
+            if meas is not None:
+                smoother.add(meas["L_mm"], meas["W_mm"])
+            else:
+                smoother.reset()
+                unknown_frames = 0
+
+        sL, sW = smoother.get()
         active_profile = None
 
-        if meas is not None:
-            smoother.add(meas["L_mm"], meas["W_mm"])
-            sL, sW = smoother.get()
-            if sL is not None:
-                if locked_profile is not None:
-                    active_profile = catalog.find_by_name(locked_profile)
-                    if active_profile is None:
-                        locked_profile = None
+        if meas is not None and sL is not None:
+            if locked_profile is not None:
+                active_profile = catalog.find_by_name(locked_profile)
                 if active_profile is None:
-                    active_profile = catalog.match(sL, sW)
+                    locked_profile = None
+            if active_profile is None:
+                active_profile = catalog.match(sL, sW)
 
-                if active_profile is not None:
-                    unknown_frames = 0
-                    if auto_send and meas["confidence"] >= cfg.CONFIDENCE_MIN:
-                        _, _, overall = evaluate_status(sL, sW, active_profile)
-                        if controller.should_send(sL, sW, overall):
-                            api.send(
-                                sL,
-                                sW,
-                                overall,
-                                meas["confidence"],
-                                active_profile["name"],
-                            )
-                            controller.mark(sL, sW, overall)
+            if active_profile is not None:
+                unknown_frames = 0
+                if auto_send and meas["confidence"] >= cfg.CONFIDENCE_MIN:
+                    _, _, overall = evaluate_status(sL, sW, active_profile)
+                    if controller.should_send(sL, sW, overall):
+                        api.send(
+                            sL,
+                            sW,
+                            overall,
+                            meas["confidence"],
+                            active_profile["name"],
+                        )
+                        controller.mark(sL, sW, overall)
+            else:
+                if (
+                    meas["confidence"] >= cfg.CONFIDENCE_MIN
+                    and smoother.count >= cfg.SMOOTH_SAMPLES
+                    and cfg.CALIBRATED
+                ):
+                    unknown_frames += 1
                 else:
-                    if (
-                        meas["confidence"] >= cfg.CONFIDENCE_MIN
-                        and smoother.count >= cfg.SMOOTH_SAMPLES
-                        and cfg.CALIBRATED
-                    ):
-                        unknown_frames += 1
-                    else:
-                        unknown_frames = 0
-        else:
-            smoother.reset()
-            unknown_frames = 0
+                    unknown_frames = 0
 
         annotated = draw_overlay(frame, meas, contour, box_pts, active_profile, sL, sW)
 
@@ -2380,6 +2936,39 @@ def main():
             live_cal_mode=live_cal_mode,
             ref_present=ref_present,
         )
+
+        # ── FPS + inference latency overlay (top-right of top bar) ──
+        now = time.time()
+        fps_times.append(now)
+        fps_now = 0.0
+        if len(fps_times) >= 2:
+            span = fps_times[-1] - fps_times[0]
+            if span > 0:
+                fps_now = (len(fps_times) - 1) / span
+        inf_ms = measurer.inference_ms() if measurer is not None else 0.0
+        fps_clr = cfg.C_OK if fps_now >= 25 else (cfg.C_YELLOW if fps_now >= 15 else cfg.C_NG)
+        cv2.putText(
+            display,
+            f"{fps_now:4.1f} FPS",
+            (display.shape[1] - 200, 22),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.5,
+            fps_clr,
+            1,
+            cv2.LINE_AA,
+        )
+        if inf_ms > 0:
+            cv2.putText(
+                display,
+                f"inf {inf_ms:5.0f}ms",
+                (display.shape[1] - 200, 44),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.45,
+                cfg.C_GRAY,
+                1,
+                cv2.LINE_AA,
+            )
+
         cv2.imshow(WIN, display)
 
         # ── Stream hook: push annotated frame ke web dashboard (kalau aktif) ──
@@ -2509,6 +3098,8 @@ def main():
             else:
                 print("[!] No active profile to delete")
 
+    if measurer is not None:
+        measurer.stop()
     cap.release()
     cv2.destroyAllWindows()
     print("Done.")
