@@ -37,16 +37,48 @@ const PAGE_SIZE = 10;
 let latestData = [];
 const historyState = {
   page: 1,
-  sortKey: 'id',          // default: ID
-  sortDir: 'desc',        // newest first
+  sortKey: 'id',           // default: ID desc → newest first (id auto-increment)
+  sortDir: 'desc',
   search: '',
-  statusFilter: 'all',    // 'all' | 'GOOD' | 'NOT GOOD'
+  statusFilter: 'all',     // 'all' | 'GOOD' | 'NOT GOOD'
+  objectFilter: null,      // null = semua. Set<string> = subset terpilih.
 };
 const groupedState = {
   page: 1,
-  sortKey: 'total',
+  sortKey: 'lastSeen',     // default: terakhir terlihat desc → newest first
   sortDir: 'desc',
   search: '',
+  objectFilter: null,
+};
+
+// ─── LIVE CAMERA STREAM (WS-binary JPEG dari stream/publisher.py) ─────
+// Two ports: STREAM_PORT (frames in) + CONTROL_PORT (keybind out).
+// Browser direct WS — no server.js proxy (WS bypasses CORS).
+// ─── AUTH STATE (Phase 2) ────────────────────────────────────────────
+// User identity di-resolve di startup via:
+//   1. ?token=xxx di URL → simpan ke localStorage, validate via /api/auth/verify
+//   2. localStorage 'capstone_auth_token' → validate
+//   3. Tidak ada keduanya → guest mode (UI default = operator-like, tapi tanpa claims)
+const AUTH_STORAGE_KEY = 'capstone_auth_token';
+const authState = {
+  token: null,
+  user: null,    // { id, email, name, role } setelah verify sukses
+  config: null,  // dari /api/auth/config
+};
+
+const STREAM_PORT  = 8765;
+const CONTROL_PORT = 8766;
+
+const liveCam = {
+  videoWs: null,
+  videoBackoff: 1000,
+  controlWs: null,
+  controlBackoff: 1000,
+  pendingFrame: null,           // single-slot — newest wins, drop stale
+  rafScheduled: false,
+  frameCount: 0,
+  lastFpsT: 0,
+  fps: 0,
 };
 
 // ─── INIT ─────────────────────────────────────────────────────────────
@@ -63,6 +95,17 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshTimer = setInterval(fetchAndRender, REFRESH_MS);
   setInterval(fetchPending, PENDING_MS);
   connectWebSocket();
+
+  // Live camera stream (WS-binary JPEG dari edge_camera.py)
+  initLiveCameraButtons();
+  connectLiveCameraVideo();
+  connectLiveCameraControl();
+
+  // Phase 1: sidebar nav, mobile toggle, active section highlight
+  initSidebar();
+
+  // Phase 2: auth — extract token dari URL, validate, gate UI by role
+  initAuth();
 });
 
 // ─────────────────────────────────────────────────────────────────────
@@ -156,6 +199,408 @@ function setWsIndicator(online) {
   el.title = online
     ? 'Realtime WebSocket aktif — update tanpa delay'
     : 'WebSocket offline — fallback polling 15s';
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0b. LIVE CAMERA STREAM (WS-binary JPEG + control)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Pasang click handler ke 12 tombol keybind. Klik → POST keylabel via
+ * control WS ke edge_camera.py. Tombol Q dengan data-confirm minta konfirmasi.
+ */
+function initLiveCameraButtons() {
+  document.querySelectorAll('.keybind-btn[data-key]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const key = btn.dataset.key;
+      const confirmMsg = btn.dataset.confirm;
+      if (confirmMsg && !window.confirm(confirmMsg)) return;
+      sendKeyToEdge(key, btn);
+    });
+  });
+}
+
+/**
+ * Kirim keybind via control WS. Pulse animasi pada tombol untuk feedback.
+ */
+function sendKeyToEdge(keyLabel, btnEl) {
+  if (!liveCam.controlWs || liveCam.controlWs.readyState !== WebSocket.OPEN) {
+    showToast('Control channel offline — edge_camera.py belum jalan?', 'error');
+    return;
+  }
+  try {
+    liveCam.controlWs.send(JSON.stringify({ key: keyLabel }));
+    if (btnEl) {
+      btnEl.classList.add('keybind-pressed');
+      setTimeout(() => btnEl.classList.remove('keybind-pressed'), 300);
+    }
+  } catch (e) {
+    console.warn('[LIVE-CAM] sendKey failed:', e.message);
+  }
+}
+
+/**
+ * Connect ke WS publisher. Reconnect dengan exponential backoff 1s→30s.
+ */
+function connectLiveCameraVideo() {
+  const url = `ws://${location.hostname || 'localhost'}:${STREAM_PORT}`;
+  let videoWs;
+  try {
+    videoWs = new WebSocket(url);
+    videoWs.binaryType = 'arraybuffer';
+  } catch (e) {
+    console.warn('[LIVE-CAM] video WS constructor gagal:', e.message);
+    scheduleVideoReconnect();
+    return;
+  }
+  liveCam.videoWs = videoWs;
+
+  videoWs.addEventListener('open', () => {
+    console.log('[LIVE-CAM] video connected');
+    liveCam.videoBackoff = 1000;
+    setStreamStatus(true);
+  });
+
+  videoWs.addEventListener('message', (ev) => {
+    if (!(ev.data instanceof ArrayBuffer)) return;
+    // Single-slot — frame baru menggantikan frame yang belum sempat di-render.
+    liveCam.pendingFrame = new Blob([ev.data], { type: 'image/jpeg' });
+    if (!liveCam.rafScheduled) {
+      liveCam.rafScheduled = true;
+      requestAnimationFrame(renderLiveCamFrame);
+    }
+  });
+
+  videoWs.addEventListener('close', () => {
+    setStreamStatus(false);
+    scheduleVideoReconnect();
+  });
+
+  videoWs.addEventListener('error', () => {
+    setStreamStatus(false);
+    // 'close' akan fire, reconnect via close handler
+  });
+}
+
+function scheduleVideoReconnect() {
+  setTimeout(() => {
+    liveCam.videoBackoff = Math.min(liveCam.videoBackoff * 2, 30000);
+    connectLiveCameraVideo();
+  }, liveCam.videoBackoff);
+}
+
+/**
+ * Connect ke control WS untuk mengirim keybind.
+ */
+function connectLiveCameraControl() {
+  const url = `ws://${location.hostname || 'localhost'}:${CONTROL_PORT}`;
+  let cws;
+  try {
+    cws = new WebSocket(url);
+  } catch (e) {
+    scheduleControlReconnect();
+    return;
+  }
+  liveCam.controlWs = cws;
+
+  cws.addEventListener('open', () => {
+    console.log('[LIVE-CAM] control connected');
+    liveCam.controlBackoff = 1000;
+  });
+
+  cws.addEventListener('message', (ev) => {
+    // Server reply {ok, key} / {ok:false, error} — log saja.
+    try {
+      const r = JSON.parse(ev.data);
+      if (!r.ok) console.warn('[LIVE-CAM] control reply error:', r.error);
+    } catch (_) { /* ignore */ }
+  });
+
+  cws.addEventListener('close', () => {
+    scheduleControlReconnect();
+  });
+
+  cws.addEventListener('error', () => {
+    /* close akan fire */
+  });
+}
+
+function scheduleControlReconnect() {
+  setTimeout(() => {
+    liveCam.controlBackoff = Math.min(liveCam.controlBackoff * 2, 30000);
+    connectLiveCameraControl();
+  }, liveCam.controlBackoff);
+}
+
+/**
+ * Render frame dari pendingFrame ke canvas. Dipanggil via rAF — sync ke
+ * refresh rate display, drop frame stale otomatis.
+ */
+async function renderLiveCamFrame() {
+  liveCam.rafScheduled = false;
+  const blob = liveCam.pendingFrame;
+  if (!blob) return;
+  liveCam.pendingFrame = null; // consumed
+
+  const canvas = document.getElementById('live-cam-canvas');
+  const placeholder = document.getElementById('live-cam-placeholder');
+  if (!canvas) return;
+
+  try {
+    const bitmap = await createImageBitmap(blob);
+    if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+    }
+    const ctx = canvas.getContext('2d', { alpha: false, desynchronized: true });
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    if (placeholder) placeholder.style.display = 'none';
+
+    // FPS counter (rolling per-second)
+    liveCam.frameCount++;
+    const now = performance.now();
+    if (now - liveCam.lastFpsT >= 1000) {
+      liveCam.fps = liveCam.frameCount * 1000 / (now - liveCam.lastFpsT);
+      liveCam.frameCount = 0;
+      liveCam.lastFpsT = now;
+      const badge = document.getElementById('live-fps-badge');
+      if (badge) badge.textContent = `${liveCam.fps.toFixed(1)} fps`;
+    }
+  } catch (e) {
+    console.warn('[LIVE-CAM] decode/render error:', e.message);
+  }
+}
+
+function setStreamStatus(online) {
+  const el = document.getElementById('live-stream-status');
+  const placeholder = document.getElementById('live-cam-placeholder');
+  if (!el) return;
+  el.classList.toggle('online', online);
+  el.classList.toggle('offline', !online);
+  el.textContent = online ? '⬤ online' : '⬤ offline';
+  if (!online && placeholder) {
+    placeholder.style.display = '';
+    const badge = document.getElementById('live-fps-badge');
+    if (badge) badge.textContent = '— fps';
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0c. SIDEBAR NAV + MOBILE TOGGLE (Phase 1)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Init sidebar:
+ *   1. Mobile hamburger toggle membuka/tutup sidebar
+ *   2. Backdrop click + Esc → tutup
+ *   3. Smooth-scroll ke section saat klik nav-item
+ *   4. Active state nav-item mengikuti section yang sedang viewport (IntersectionObserver)
+ *   5. Logout button placeholder (Phase 2 baru implementasi auth)
+ */
+function initSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  const backdrop = document.getElementById('sidebar-backdrop');
+  const toggle = document.getElementById('sidebar-toggle');
+  const navItems = document.querySelectorAll('.nav-item[data-section]');
+  // Catatan: logout button di-wire oleh initAuth() (Phase 2).
+
+  if (!sidebar) return;
+
+  const openSidebar = () => {
+    sidebar.classList.add('open');
+    if (backdrop) backdrop.removeAttribute('hidden');
+    if (toggle) toggle.setAttribute('aria-expanded', 'true');
+  };
+  const closeSidebar = () => {
+    sidebar.classList.remove('open');
+    if (backdrop) backdrop.setAttribute('hidden', '');
+    if (toggle) toggle.setAttribute('aria-expanded', 'false');
+  };
+
+  if (toggle) {
+    toggle.addEventListener('click', () => {
+      sidebar.classList.contains('open') ? closeSidebar() : openSidebar();
+    });
+  }
+  if (backdrop) backdrop.addEventListener('click', closeSidebar);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && sidebar.classList.contains('open')) closeSidebar();
+  });
+
+  // Klik nav-item: (a) update active class manual (b) auto-close sidebar di mobile.
+  // CATATAN: scroll-spy via IntersectionObserver SENGAJA dihapus — user tidak
+  // ingin focus/active sidebar berubah saat scroll. Active hanya bergeser
+  // ketika user explicit klik nav item.
+  navItems.forEach(item => {
+    item.addEventListener('click', () => {
+      navItems.forEach(n => n.classList.toggle('active', n === item));
+      if (window.matchMedia('(max-width: 899px)').matches) {
+        setTimeout(closeSidebar, 100);
+      }
+    });
+  });
+
+  // Logout button — handler dipasang di initAuth() (Phase 2)
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0d. AUTH (Phase 2) — token verify + role gating
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Init auth pipeline:
+ *  1. Fetch /api/auth/config (VPS login URL, dev-token allowed flag)
+ *  2. Cek URL ?token=xxx → store ke localStorage + bersihkan URL
+ *  3. Cek localStorage token → validate via /api/auth/verify
+ *  4. Kalau valid → update sidebar + role-based gating
+ *  5. Kalau tidak ada token → guest mode (UI tetap full, untuk localhost dev)
+ *  6. Kalau token invalid/expired → clear localStorage, redirect ke VPS login
+ *  7. Wire logout button → clear + redirect
+ */
+async function initAuth() {
+  // 1. Config (best-effort, tidak blocking)
+  try {
+    const r = await fetch('/api/auth/config');
+    if (r.ok) {
+      const j = await r.json();
+      authState.config = j.data || null;
+    }
+  } catch (_) { /* offline OK */ }
+
+  // 2. Cek URL ?token= dan pindahkan ke localStorage
+  const params = new URL(location.href).searchParams;
+  const urlToken = params.get('token');
+  if (urlToken) {
+    localStorage.setItem(AUTH_STORAGE_KEY, urlToken);
+    // Clean up URL supaya token tidak muncul di history/bookmark
+    const cleanUrl = location.pathname + location.hash;
+    history.replaceState(null, '', cleanUrl);
+  }
+
+  // 3. Resolve token — URL menang, kalau tidak ada pakai localStorage
+  const token = localStorage.getItem(AUTH_STORAGE_KEY);
+  authState.token = token;
+
+  if (!token) {
+    // Guest mode — sidebar tampilkan default "Operator (local)"
+    applyRoleGating(null);   // null = no gating, full UI (localhost dev)
+    wireLogoutButton(false);
+    return;
+  }
+
+  // 4. Validate via /api/auth/verify
+  try {
+    const r = await fetch('/api/auth/verify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }),
+    });
+    const j = await r.json();
+    if (!r.ok || !j.success) {
+      // Token invalid/expired → clear & guest mode (atau redirect)
+      console.warn('[AUTH] token invalid:', j.message);
+      localStorage.removeItem(AUTH_STORAGE_KEY);
+      authState.token = null;
+      authState.user = null;
+      showToast(`Sesi tidak valid: ${j.message || 'token expired'}`, 'error');
+      // Tidak auto-redirect supaya user bisa pakai guest mode kalau perlu
+      applyRoleGating(null);
+      wireLogoutButton(false);
+      return;
+    }
+
+    // 5. Sukses
+    authState.user = j.data.user;
+    updateSidebarUser(authState.user);
+    applyRoleGating(authState.user.role);
+    wireLogoutButton(true);
+
+    showToast(`Login sebagai ${authState.user.name} (${authState.user.role})`, 'ok');
+  } catch (e) {
+    console.warn('[AUTH] verify failed:', e.message);
+    applyRoleGating(null); // graceful: tetap pakai mode guest
+  }
+}
+
+/**
+ * Update sidebar user card dengan data user real.
+ */
+function updateSidebarUser(user) {
+  if (!user) return;
+  const nameEl = document.getElementById('user-name');
+  const roleEl = document.getElementById('user-role');
+  const avatarEl = document.getElementById('user-avatar');
+  if (nameEl) nameEl.textContent = user.name || 'User';
+  if (roleEl) {
+    roleEl.textContent = user.role;
+    // Set role color via CSS variable (theme.css punya --role-operator/supervisor/manager)
+    const colorVar = `var(--role-${user.role}, var(--accent-cyan))`;
+    roleEl.style.color = colorVar;
+  }
+  if (avatarEl) {
+    avatarEl.textContent = (user.name || 'U').charAt(0).toUpperCase();
+    // Avatar gradient mengikuti role
+    avatarEl.style.background =
+      `linear-gradient(135deg, var(--role-${user.role}, var(--accent-cyan)), var(--accent-blue))`;
+  }
+}
+
+/**
+ * Hide/show section berdasarkan role.
+ *  - operator: full akses (live cam + semua data)
+ *  - supervisor: data only, sembunyiin live camera section
+ *  - manager: data only (Phase 4 nanti tambah Admin link)
+ *  - null (guest mode): full akses (untuk localhost dev tanpa Next.js)
+ */
+function applyRoleGating(role) {
+  const liveCamSection = document.getElementById('section-live-camera');
+  const liveCamNav = document.querySelector('.nav-item[data-section="section-live-camera"]');
+
+  // Hide live camera kalau bukan operator (dan token valid — guest mode null = jangan hide)
+  const hideLiveCam = role !== null && role !== 'operator';
+  if (liveCamSection) liveCamSection.hidden = hideLiveCam;
+  if (liveCamNav) liveCamNav.style.display = hideLiveCam ? 'none' : '';
+
+  // Update body class untuk styling kondisional di CSS kalau perlu
+  document.body.dataset.role = role || 'guest';
+}
+
+/**
+ * Logout: clear localStorage, redirect ke VPS login (kalau ada config) atau reload.
+ */
+function wireLogoutButton(hasSession) {
+  const btn = document.getElementById('btn-logout');
+  if (!btn) return;
+  // Clean previous listener kalau ada (re-init safety)
+  const fresh = btn.cloneNode(true);
+  btn.parentNode.replaceChild(fresh, btn);
+
+  fresh.addEventListener('click', () => {
+    if (!hasSession) {
+      // Guest mode — kasih tahu user mode yang sedang dipakai
+      const vpsUrl = authState.config?.vps_login_url;
+      if (vpsUrl) {
+        if (window.confirm(`Saat ini guest mode. Login via VPS?\n\n${vpsUrl}`)) {
+          location.href = vpsUrl;
+        }
+      } else {
+        showToast('Guest mode aktif (no token). Login akan tersedia setelah Phase 3 (VPS Next.js).', 'info');
+      }
+      return;
+    }
+    // Has session — clear & redirect
+    localStorage.removeItem(AUTH_STORAGE_KEY);
+    authState.token = null;
+    authState.user = null;
+    const vpsUrl = authState.config?.vps_login_url;
+    if (vpsUrl) {
+      location.href = vpsUrl;
+    } else {
+      location.reload();
+    }
+  });
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -418,7 +863,7 @@ function renderHistory(data) {
 
   recordCountEl.textContent = `${data.length} rekod`;
 
-  // 1. Apply filter (search + status)
+  // 1. Apply filter (search + status + object multi-select)
   const q = historyState.search.trim().toLowerCase();
   let filtered = (data || []).filter(item => {
     if (historyState.statusFilter !== 'all' && item.status !== historyState.statusFilter) return false;
@@ -426,6 +871,7 @@ function renderHistory(data) {
       const name = String(item.object_name || '').toLowerCase();
       if (!name.includes(q)) return false;
     }
+    if (!passesObjectFilter(item, historyState)) return false;
     return true;
   });
 
@@ -505,18 +951,22 @@ function renderGrouped(data) {
   const countEl = document.getElementById('grouped-count');
   if (!tbody) return;
 
-  // 1. Build base rows depending on mode
+  // 1. Build base rows depending on mode (apply object filter di level row sumber)
   let baseRows = [];
   if (!data || data.length === 0) {
     baseRows = [];
   } else if (groupedMode) {
     const map = new Map();
     for (const it of data) {
+      // Object filter di sumber — supaya count agregasi merefleksikan filter
+      if (!passesObjectFilter(it, groupedState)) continue;
       const name = it.object_name && String(it.object_name).trim() ? it.object_name : '—';
-      const slot = map.get(name) || { name, total: 0, good: 0, ng: 0 };
+      const ts = it.timestamp ? new Date(it.timestamp).getTime() : 0;
+      const slot = map.get(name) || { name, total: 0, good: 0, ng: 0, lastSeen: 0 };
       slot.total++;
       if (it.status === 'GOOD') slot.good++;
       else if (it.status === 'NOT GOOD') slot.ng++;
+      if (ts > slot.lastSeen) slot.lastSeen = ts;
       map.set(name, slot);
     }
     baseRows = Array.from(map.values()).map(s => ({
@@ -526,22 +976,26 @@ function renderGrouped(data) {
       ng: s.ng,
       goodPct: s.total > 0 ? (s.good / s.total) * 100 : 0,
       ngPct:   s.total > 0 ? (s.ng   / s.total) * 100 : 0,
+      lastSeen: s.lastSeen,
     }));
   } else {
     // Flat mode: satu baris per inspeksi
-    baseRows = data.map(it => {
-      const name = it.object_name && String(it.object_name).trim() ? it.object_name : '—';
-      const isOK = it.status === 'GOOD';
-      return {
-        name: `${name} #${it.id}`,
-        _searchName: name,
-        total: 1,
-        good: isOK ? 1 : 0,
-        ng:   isOK ? 0 : 1,
-        goodPct: isOK ? 100 : 0,
-        ngPct:   isOK ? 0   : 100,
-      };
-    });
+    baseRows = data
+      .filter(it => passesObjectFilter(it, groupedState))
+      .map(it => {
+        const name = it.object_name && String(it.object_name).trim() ? it.object_name : '—';
+        const isOK = it.status === 'GOOD';
+        return {
+          name: `${name} #${it.id}`,
+          _searchName: name,
+          total: 1,
+          good: isOK ? 1 : 0,
+          ng:   isOK ? 0 : 1,
+          goodPct: isOK ? 100 : 0,
+          ngPct:   isOK ? 0   : 100,
+          lastSeen: it.timestamp ? new Date(it.timestamp).getTime() : 0,
+        };
+      });
   }
 
   // 2. Filter (search by name)
@@ -576,6 +1030,7 @@ function renderGrouped(data) {
   tbody.innerHTML = slice.map(r => {
     const goodPctTxt = r.goodPct.toFixed(1) + '%';
     const ngPctTxt   = r.ngPct.toFixed(1) + '%';
+    const lastTxt    = r.lastSeen ? formatRelativeTime(r.lastSeen) : '—';
     return `
       <tr>
         <td class="td-obj">${escapeHtml(r.name)}</td>
@@ -584,11 +1039,32 @@ function renderGrouped(data) {
         <td class="td-num td-ng">${r.ng}</td>
         <td class="td-num td-good">${goodPctTxt}</td>
         <td class="td-num td-ng">${ngPctTxt}</td>
+        <td class="td-num td-last">${lastTxt}</td>
       </tr>`;
   }).join('');
 
   renderPagination('grouped-pagination', groupedState, totalPages, () => renderGrouped(latestData));
   updateSortIndicators('grouped-table', groupedState);
+}
+
+/**
+ * Format relative time: "12 dtk lalu", "5 mnt lalu", "2 jam lalu", "3 hari lalu".
+ * Untuk kolom "Terakhir" di tabel klasifikasi.
+ */
+function formatRelativeTime(timestamp) {
+  if (!timestamp) return '—';
+  const diff = Date.now() - Number(timestamp);
+  if (!Number.isFinite(diff) || diff < 0) return '—';
+  const sec = Math.floor(diff / 1000);
+  if (sec < 60)   return `${sec} dtk lalu`;
+  const min = Math.floor(sec / 60);
+  if (min < 60)   return `${min} mnt lalu`;
+  const hr  = Math.floor(min / 60);
+  if (hr < 24)    return `${hr} jam lalu`;
+  const day = Math.floor(hr / 24);
+  if (day < 30)   return `${day} hari lalu`;
+  const mo = Math.floor(day / 30);
+  return `${mo} bln lalu`;
 }
 
 /**
@@ -746,6 +1222,173 @@ function attachSortHandlers(tableId, state, rerender) {
   });
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// 7d. OBJECT MULTI-SELECT FILTER (checkbox dropdown, both tables)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Hitung distinct object names dari data + count per name.
+ * Return array of [name, count], sorted by count desc.
+ */
+function getDistinctObjects(data) {
+  const map = new Map();
+  for (const it of data || []) {
+    const name = (it.object_name && String(it.object_name).trim()) || '—';
+    map.set(name, (map.get(name) || 0) + 1);
+  }
+  return Array.from(map.entries()).sort((a, b) => b[1] - a[1]);
+}
+
+/**
+ * Apakah row lolos object filter?
+ *   - state.objectFilter === null → ya (default: semua)
+ *   - state.objectFilter === Set → hanya kalau name ada di set
+ */
+function passesObjectFilter(item, state) {
+  if (state.objectFilter === null) return true;
+  const name = (item.object_name && String(item.object_name).trim()) || '—';
+  return state.objectFilter.has(name);
+}
+
+/**
+ * Render checkbox list di panel filter. Re-render tiap data berubah.
+ * Checkbox state mengikuti state.objectFilter (null = semua checked).
+ */
+function renderObjectFilterPanel(listId, state, distinctObjects, rerender, btnLabelEl) {
+  const list = document.getElementById(listId);
+  if (!list) return;
+
+  if (distinctObjects.length === 0) {
+    list.innerHTML = '<li class="empty-msg">Belum ada data objek</li>';
+    updateObjectFilterLabel(btnLabelEl, state, distinctObjects);
+    return;
+  }
+
+  list.innerHTML = distinctObjects.map(([name, count]) => {
+    const checked = state.objectFilter === null || state.objectFilter.has(name);
+    const safeName = escapeHtml(name);
+    return `
+      <li>
+        <label>
+          <input type="checkbox" data-name="${safeName}" ${checked ? 'checked' : ''} />
+          <span class="obj-name" title="${safeName}">${safeName}</span>
+          <span class="obj-count">(${count})</span>
+        </label>
+      </li>`;
+  }).join('');
+
+  // Wire checkbox change handlers (event delegation simpler)
+  list.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+    cb.addEventListener('change', () => {
+      const name = cb.dataset.name;
+      // First mutation from "null=all" → snapshot all distinct names into Set
+      if (state.objectFilter === null) {
+        state.objectFilter = new Set(distinctObjects.map(([n]) => n));
+      }
+      if (cb.checked) {
+        state.objectFilter.add(name);
+      } else {
+        state.objectFilter.delete(name);
+      }
+      // Optimasi: kalau kembali ke semua-tercentang, normalisasi ke null
+      if (state.objectFilter.size === distinctObjects.length) {
+        state.objectFilter = null;
+      }
+      state.page = 1;
+      updateObjectFilterLabel(btnLabelEl, state, distinctObjects);
+      rerender();
+    });
+  });
+
+  updateObjectFilterLabel(btnLabelEl, state, distinctObjects);
+}
+
+/**
+ * Update label tombol: "Semua Objek" / "{name}" / "{N} dipilih" / "0 dipilih"
+ */
+function updateObjectFilterLabel(btnLabelEl, state, distinctObjects) {
+  if (!btnLabelEl) return;
+  if (state.objectFilter === null) {
+    btnLabelEl.textContent = 'Semua Objek';
+    btnLabelEl.classList.remove('has-selection');
+    return;
+  }
+  const n = state.objectFilter.size;
+  if (n === 0) {
+    btnLabelEl.textContent = '0 dipilih';
+  } else if (n === 1) {
+    btnLabelEl.textContent = Array.from(state.objectFilter)[0];
+  } else if (n === distinctObjects.length) {
+    btnLabelEl.textContent = 'Semua Objek';
+    btnLabelEl.classList.remove('has-selection');
+    return;
+  } else {
+    btnLabelEl.textContent = `${n} dipilih`;
+  }
+  btnLabelEl.classList.add('has-selection');
+}
+
+/**
+ * Pasang dropdown toggle + click-outside-to-close + action buttons (Pilih Semua / Hapus).
+ */
+function attachObjectFilterDropdown(btnId, panelId, listId, state, rerender) {
+  const btn = document.getElementById(btnId);
+  const panel = document.getElementById(panelId);
+  if (!btn || !panel) return;
+
+  const labelEl = btn.querySelector('.object-filter-label');
+
+  // Toggle open/close
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = panel.hasAttribute('hidden');
+    if (open) {
+      // Re-render checkboxes with fresh distinct list (data may have grown)
+      const distinct = getDistinctObjects(latestData);
+      renderObjectFilterPanel(listId, state, distinct, rerender, labelEl);
+      panel.removeAttribute('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+    } else {
+      panel.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // Action buttons inside panel
+  panel.querySelectorAll('[data-action]').forEach(actBtn => {
+    actBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const distinct = getDistinctObjects(latestData);
+      if (actBtn.dataset.action === 'select-all') {
+        state.objectFilter = null; // null = semua
+      } else if (actBtn.dataset.action === 'clear') {
+        state.objectFilter = new Set(); // kosong = tidak ada
+      }
+      state.page = 1;
+      renderObjectFilterPanel(listId, state, distinct, rerender, labelEl);
+      rerender();
+    });
+  });
+
+  // Click outside → close
+  document.addEventListener('click', (e) => {
+    if (panel.hasAttribute('hidden')) return;
+    if (!panel.contains(e.target) && !btn.contains(e.target)) {
+      panel.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  });
+
+  // Esc to close
+  panel.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      panel.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', 'false');
+      btn.focus();
+    }
+  });
+}
+
 // Wire up filter/sort listeners setelah DOM siap.
 document.addEventListener('DOMContentLoaded', () => {
   // History table
@@ -767,6 +1410,13 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
   attachSortHandlers('history-table', historyState, () => renderHistory(latestData));
+  attachObjectFilterDropdown(
+    'history-object-filter-btn',
+    'history-object-filter-panel',
+    'history-object-filter-list',
+    historyState,
+    () => renderHistory(latestData),
+  );
 
   // Grouped table
   const grpSearch = document.getElementById('grouped-search');
@@ -779,6 +1429,13 @@ document.addEventListener('DOMContentLoaded', () => {
     grpSearch.addEventListener('input', onGrpSearch);
   }
   attachSortHandlers('grouped-table', groupedState, () => renderGrouped(latestData));
+  attachObjectFilterDropdown(
+    'grouped-object-filter-btn',
+    'grouped-object-filter-panel',
+    'grouped-object-filter-list',
+    groupedState,
+    () => renderGrouped(latestData),
+  );
 });
 
 // ─────────────────────────────────────────────────────────────────────

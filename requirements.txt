@@ -20,9 +20,35 @@ numpy>=1.24.0,<3.0
 # ── HTTP client (POST measurements to backend) ──────────────────────────
 requests>=2.31.0
 
-# ── ML-based background removal (U2-Net via ONNX) ───────────────────────
+# ── ML-based background removal (U2-Net / ISNet / BiRefNet via ONNX) ────
 # rembg pulls in: onnxruntime, scikit-image, pymatting, numba, llvmlite,
 # pooch, imageio, tifffile, jsonschema, etc. as transitive dependencies.
-# First call downloads u2netp.onnx (~5 MB) to ~/.u2net/ cache.
+# Default model isnet-general-use (~178 MB) cached ke ./models/rembg/.
 rembg>=2.0.50
+#
+# Execution provider — pilih SALAH SATU (default jika tidak set: CPU):
+#
+#   onnxruntime>=1.17.0
+#     ✓ Works everywhere, default install
+#     ✓ macOS Apple Silicon: include CoreML EP otomatis (akselerasi M-series)
+#     ✗ Windows: hanya CPU — install onnxruntime-directml untuk akselerasi GPU
+#
+#   onnxruntime-directml>=1.17.0   (UNCOMMENT untuk Windows GPU)
+#     ✓ Windows GPU (any vendor: NVIDIA / AMD / Intel)
+#     ✓ 3-5x speedup di Windows dengan GPU manapun
+#     Set REMBG_PROVIDER=dml untuk pakai. Conflict dengan plain onnxruntime —
+#     jangan install dua-duanya. Uninstall onnxruntime dulu.
+#
+#   onnxruntime-gpu>=1.17.0   (UNCOMMENT untuk NVIDIA CUDA)
+#     ✓ Linux/Windows dengan NVIDIA GPU + CUDA 11/12 + cuDNN
+#     Set REMBG_PROVIDER=cuda untuk pakai. Conflict dengan plain onnxruntime.
+#
 onnxruntime>=1.17.0
+# onnxruntime-directml>=1.17.0   # Windows GPU users: uncomment + comment line above
+# onnxruntime-gpu>=1.17.0        # NVIDIA users: uncomment + comment line above
+
+# ── Live streaming module (web dashboard kamera + keybind) ─────────────
+# stream/ package: WSPublisher (port 8765) + WSControl (port 8766).
+# Pure-Python WebSocket — no native deps. Optional: pipeline tetap jalan
+# tanpa modul ini (stream akan disabled dengan warning).
+websockets>=12.0

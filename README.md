@@ -1325,28 +1325,55 @@ pip install -r requirements.txt
 
 ---
 
-## 🗺️ Roadmap
+## 🗺️ Roadmap / Release Highlights
 
-### v2.1 — Q3 2026
-- [ ] Multi-object simultaneous measurement (multiple objects in one frame)
-- [ ] Calibration profile persistence per camera setup
-- [ ] Export ke CSV/Excel dari dashboard
-- [ ] Authentication di dashboard (multi-user role)
-- [ ] Dark/light theme toggle
+### v2.1.0 — Hybrid Naming & Masking Robustness
+- [x] Hybrid object naming melalui terminal dan dashboard web
+- [x] Pending object API untuk registrasi objek baru
+- [x] Terminal fallback saat server/dashboard tidak aktif
+- [x] Dashboard "Objek Baru" dengan auto-focus dan Enter-to-save
+- [x] Perbaikan masking agar objek besar tidak salah dianggap gangguan tepi
+- [x] Perbaikan deteksi kontur pada objek reflektif atau berlubang
+- [x] Typing UX dashboard lebih stabil tanpa cursor reset saat polling
 
-### v2.2 — Q4 2026
-- [ ] Live-cal handheld mode improvements (continuous KTP tracking)
-- [ ] Stereo camera support untuk 3D measurement
-- [ ] Telegram bot integration untuk NG alerts
-- [ ] WebSocket untuk real-time push (replace polling)
-- [ ] PDF report generation
+### v2.2.0 — PostgreSQL, WebSocket, and CDC Sync
+- [x] Migrasi storage dari JSON flat-file ke Hybrid PostgreSQL + JSON mirror
+- [x] PostgreSQL schema, trigger, view analitik, dan sample seed data
+- [x] Bidirectional CDC sync antara PostgreSQL dan JSON
+- [x] WebSocket realtime untuk update dashboard tanpa refresh
+- [x] Graceful fallback ke JSON-only mode saat PostgreSQL tidak aktif
+- [x] REST API v1 untuk status, inspection, statistik objek, tren, dan recent data
+- [x] Quality Assurance test suite dengan 52/52 test passed
 
-### v3.0 — 2027
-- [ ] Custom object classifier (TensorFlow Lite) untuk type recognition
-- [ ] Edge deployment ke Raspberry Pi 5
-- [ ] Database backend (PostgreSQL) untuk scale beyond 10k records
-- [ ] Mobile app native (React Native)
-- [ ] Cloud sync (Firebase / Supabase)
+### v2.3.0 — Dashboard UX and Canonical Status Label
+- [x] Migrasi label status dari OK/NG menjadi GOOD/NOT GOOD
+- [x] Dashboard KPI dengan Total Inspeksi, Total GOOD, Total NOT GOOD, %GOOD, dan %NOT GOOD
+- [x] Tabel klasifikasi hasil inspeksi per objek
+- [x] Riwayat inspeksi dengan search, filter status, sorting, dan pagination
+- [x] Sortable table header dengan indikator arah sorting
+- [x] Pagination 10 baris per halaman dengan navigasi halaman
+- [x] Backward compatibility untuk status legacy OK/NG dari edge camera
+
+### v2.4.0 — VPS Dashboard, Export, and Audit Log
+- [x] Persiapan VPS multi-role dashboard berbasis Next.js
+- [x] Live camera streaming untuk pemantauan proses inspeksi
+- [x] Refresh UX pada dashboard lokal
+- [x] Local auth bridge untuk integrasi autentikasi
+- [x] Export multi-format untuk kebutuhan laporan inspeksi
+- [x] Audit log untuk pencatatan aktivitas sistem
+- [x] PM2 configuration untuk deployment server
+- [x] Sinkronisasi versioning root project dan VPS dashboard
+
+### v2.5.0 — Segmentation Pipeline Upgrade and GPU Acceleration
+- [x] Upgrade model segmentasi dari u2netp ke isnet-general-use
+- [x] Alpha matting untuk perbaikan tepi objek dan kontur kompleks
+- [x] Shadow removal untuk mengurangi pengaruh bayangan pada hasil mask
+- [x] Hardware acceleration otomatis melalui CoreML, DirectML, CUDA, atau CPU fallback
+- [x] Async inference worker agar loop kamera tetap responsif
+- [x] Inference downsampling untuk mempercepat proses segmentasi
+- [x] Local model cache agar model rembg tersimpan di repository lokal
+- [x] Loading progress dan preload session saat startup
+- [x] HUD FPS dan inference latency overlay untuk monitoring performa
 
 ---
 
@@ -1359,12 +1386,15 @@ pip install -r requirements.txt
 
 </div>
 
+
 | Role | Nama | Kontribusi |
 |------|------|------------|
-| 🔧 **Lead Developer** | Hilmy Raihan Kindy | Edge pipeline, calibration wizard, sub-pixel refinement |
-| 🎨 **Frontend & UX** | _[Nama Anggota]_ | Dashboard, Chart.js integration, status UI |
-| 🧪 **QA & Testing** | _[Nama Anggota]_ | Calibration validation, accuracy benchmarking |
-| 📋 **Project Lead** | _[Nama Anggota]_ | Coordination, documentation, demo |
+| 📋 **Project Manager & QC** | Fedra Ghaffar | Project coordination, task & timeline management, QC requirements, documentation & demo |
+| 📷 **Vision Inspection Hardware Engineer** | Nabilla Suci Amanda | Inspection station setup, camera & lighting configuration, image acquisition |
+| ⚙️ **Edge Computing Engineer** | Muhammad Irsyaddhia Fahlevi | Edge device deployment, processing throughput, edge-backend-dashboard connectivity |
+| 🤖 **AI / ML Engineer** | Yoshia Benedict Parasian | Computer vision pipeline (OpenCV): calibration, segmentation, dimension measurement, GOOD/NG logic |
+| 🎨 **Dashboard / Frontend Developer** | Agung Susilo Widodo | Dashboard UI, real-time KPI & charts, inspection history, filter/search/sort, export |
+| 🔗 **System Integration & Software Developer** | Hilmy Raihan Alkindy | Backend (Node.js/Express), REST API, PostgreSQL + JSON, WebSocket, integration & testing |
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "automated-dimensional-inspection",
-  "version": "2.3.0",
+  "version": "2.5.0",
   "description": "Automated Dimensional Inspection System with KTP-referenced sub-pixel calibration. Capstone A3 Kelompok 2 — Filkom Universitas Brawijaya.",
   "main": "server.js",
   "scripts": {
@@ -36,6 +36,7 @@
     "cors": "^2.8.5",
     "dotenv": "^17.4.2",
     "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.3",
     "pg": "^8.20.0",
     "ws": "^8.20.0"
   }

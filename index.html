@@ -7,7 +7,8 @@
   <meta name="theme-color" content="#0a0e1a" />
   <title>Automated Dimensional Inspection Dashboard</title>
 
-  <!-- Stylesheet -->
+  <!-- Stylesheets — theme.css MUST come first (design tokens shared with VPS Next.js) -->
+  <link rel="stylesheet" href="theme.css" />
   <link rel="stylesheet" href="style.css" />
 
   <!-- Chart.js CDN -->
@@ -18,27 +19,88 @@
 </head>
 <body>
 
-<div class="app-wrapper">
+<!-- ─── APP SHELL (sidebar + main) ─────────────────────────────────── -->
+<div class="app-shell" id="app-shell">
 
-  <!-- ─── HEADER ──────────────────────────────────────── -->
-  <header class="header">
-    <div class="header-logo">
-      <div class="header-icon" aria-hidden="true">🔬</div>
-      <div>
-        <h1>Automated Dimensional Inspection</h1>
-        <p class="header-subtitle">Monitoring Dashboard · Edge System Integration</p>
+  <!-- Mobile backdrop (hanya muncul saat sidebar open di mobile) -->
+  <div class="sidebar-backdrop" id="sidebar-backdrop" hidden></div>
+
+  <!-- ─── SIDEBAR ─────────────────────────────────────── -->
+  <aside class="sidebar" id="sidebar" aria-label="Navigasi utama">
+    <div class="sidebar-brand">
+      <div class="brand-icon" aria-hidden="true">🔬</div>
+      <div class="brand-text">
+        <span class="brand-name">Capstone A3</span>
+        <span class="brand-sub">Dimensional Inspection</span>
       </div>
     </div>
 
-    <!-- Live Clock + WS indicator -->
-    <div class="live-clock" aria-live="polite" aria-label="Waktu saat ini">
-      <div class="clock-dot"></div>
-      <span class="clock-time" id="clock-time">--:--:--</span>
-      <span class="clock-date" id="clock-date"></span>
-      <span id="ws-indicator" class="ws-indicator ws-offline"
-            title="WebSocket realtime status">⚡</span>
+    <nav class="sidebar-nav" role="navigation">
+      <a class="nav-item active" href="#section-live-camera" data-section="section-live-camera">
+        <span class="nav-icon">🎥</span>
+        <span class="nav-label">Live Camera</span>
+      </a>
+      <a class="nav-item" href="#section-stats" data-section="section-stats">
+        <span class="nav-icon">📊</span>
+        <span class="nav-label">Distribusi</span>
+      </a>
+      <!-- <a class="nav-item" href="#section-grouped" data-section="section-grouped">
+        <span class="nav-icon">📦</span>
+        <span class="nav-label">Klasifikasi</span>
+      </a> -->
+      <a class="nav-item" href="#section-chart" data-section="section-chart">
+        <span class="nav-icon">📦</span>
+        <span class="nav-label">Klasifikasi</span>
+      </a>
+      <a class="nav-item" href="#section-history" data-section="section-history">
+        <span class="nav-icon">📋</span>
+        <span class="nav-label">Riwayat</span>
+      </a>
+    </nav>
+
+    <div class="sidebar-footer">
+      <div class="user-card" id="user-card">
+        <div class="user-avatar" id="user-avatar">O</div>
+        <div class="user-meta">
+          <div class="user-name" id="user-name">Operator</div>
+          <div class="user-role" id="user-role">operator (local)</div>
+        </div>
+      </div>
+      <button type="button" class="btn-logout" id="btn-logout" title="Logout (placeholder — akan aktif di Phase 2)">
+        ⎋ Logout
+      </button>
     </div>
-  </header>
+  </aside>
+
+  <!-- ─── MAIN CONTENT ────────────────────────────────── -->
+  <div class="main-content">
+
+    <!-- ─── TOPBAR ─────────────────────────────────── -->
+    <header class="topbar" role="banner">
+      <button type="button" class="sidebar-toggle" id="sidebar-toggle"
+              aria-label="Toggle sidebar" aria-expanded="false">
+        <span class="hamburger-bar"></span>
+        <span class="hamburger-bar"></span>
+        <span class="hamburger-bar"></span>
+      </button>
+
+      <div class="topbar-title">
+        <h1 id="topbar-title-text">Automated Dimensional Inspection</h1>
+        <p class="topbar-subtitle">Monitoring Dashboard · Edge System Integration</p>
+      </div>
+
+      <div class="topbar-meta">
+        <div class="live-clock" aria-live="polite" aria-label="Waktu saat ini">
+          <div class="clock-dot"></div>
+          <span class="clock-time" id="clock-time">--:--:--</span>
+          <span class="clock-date" id="clock-date"></span>
+        </div>
+        <span id="ws-indicator" class="ws-indicator ws-offline"
+              title="WebSocket realtime status">⚡</span>
+      </div>
+    </header>
+
+    <div class="page-content">
 
   <!-- ─── CONNECTION STATUS ────────────────────────────── -->
   <div class="connection-bar disconnected" id="connection-status" role="status" aria-live="polite">
@@ -73,8 +135,96 @@
     <p class="latest-timestamp" id="latest-ts">Belum ada data</p>
   </section>
 
+  <!-- ─── LIVE CAMERA TRACKING (WS-binary JPEG) ──────── -->
+  <section id="section-live-camera" class="live-camera-section" aria-label="Live camera tracking dari edge_camera.py">
+    <div class="live-camera-header">
+      <h2 class="section-title"><span>🎥</span> Live Camera Tracking</h2>
+      <div class="live-camera-meta">
+        <span id="live-fps-badge" class="fps-badge">— fps</span>
+        <span id="live-stream-status" class="stream-status offline" title="Status koneksi WS publisher">⬤ offline</span>
+      </div>
+    </div>
+
+    <div class="live-camera-canvas-wrap">
+      <canvas id="live-cam-canvas" aria-label="Frame kamera dengan overlay tracking dari edge_camera.py"></canvas>
+      <div class="live-cam-placeholder" id="live-cam-placeholder">
+        <div class="live-cam-placeholder-icon">🎥</div>
+        <p>Menunggu koneksi ke <code>edge_camera.py</code>…</p>
+        <p class="live-cam-hint">Pastikan <code>python edge_camera.py</code> sudah berjalan di terminal.</p>
+      </div>
+    </div>
+
+    <div class="keybind-grid" role="toolbar" aria-label="Keybind kontrol web (semua 11 hotkey edge_camera.py)">
+      <button type="button" class="keybind-btn primary" data-key="SPACE" title="Force inspection — kirim 1 hasil ke server (manual)">
+        <span class="keybind-shortcut">SPACE</span>
+        <span class="keybind-label">Force Send</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="A" title="Toggle Auto-Send">
+        <span class="keybind-shortcut">A</span>
+        <span class="keybind-label">Auto-Send</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="C" title="Re-run Calibration Wizard">
+        <span class="keybind-shortcut">C</span>
+        <span class="keybind-label">Calibrate</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="R" title="Register profil objek baru manual">
+        <span class="keybind-shortcut">R</span>
+        <span class="keybind-label">Register</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="U" title="Toggle Auto-Register">
+        <span class="keybind-shortcut">U</span>
+        <span class="keybind-label">Auto-Reg</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="L" title="Toggle Live-Cal mode (handheld)">
+        <span class="keybind-shortcut">L</span>
+        <span class="keybind-label">Live-Cal</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="V" title="Toggle Mask Preview (debug)">
+        <span class="keybind-shortcut">V</span>
+        <span class="keybind-label">Mask Viz</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="[" title="Lock ke profil sebelumnya">
+        <span class="keybind-shortcut">[</span>
+        <span class="keybind-label">Prev Lock</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="]" title="Lock ke profil berikutnya">
+        <span class="keybind-shortcut">]</span>
+        <span class="keybind-label">Next Lock</span>
+      </button>
+      <button type="button" class="keybind-btn" data-key="X" title="Unlock profil — kembali auto-match">
+        <span class="keybind-shortcut">X</span>
+        <span class="keybind-label">Unlock</span>
+      </button>
+      <button type="button" class="keybind-btn warn" data-key="D" title="Hapus profil aktif/locked (permanen!)">
+        <span class="keybind-shortcut">D</span>
+        <span class="keybind-label">Delete</span>
+      </button>
+      <button type="button" class="keybind-btn danger" data-key="Q" title="Quit edge_camera.py" data-confirm="Yakin keluar program edge_camera.py?">
+        <span class="keybind-shortcut">Q</span>
+        <span class="keybind-label">Quit</span>
+      </button>
+    </div>
+
+    <!-- Sub-row: tombol situational untuk wizard kalibrasi confirm dialog (Y/N/ESC) -->
+    <div class="keybind-wizard-row" role="group" aria-label="Wizard / Confirm dialog">
+      <span class="keybind-wizard-label">Wizard / Confirm:</span>
+      <button type="button" class="keybind-btn small primary" data-key="Y" title="Y — konfirmasi YA di wizard kalibrasi">
+        <span class="keybind-shortcut">Y</span>
+        <span class="keybind-label">Yes</span>
+      </button>
+      <button type="button" class="keybind-btn small warn" data-key="N" title="N — TIDAK, ulangi wizard kalibrasi">
+        <span class="keybind-shortcut">N</span>
+        <span class="keybind-label">No</span>
+      </button>
+      <button type="button" class="keybind-btn small" data-key="ESC" title="ESC — batalkan wizard kalibrasi">
+        <span class="keybind-shortcut">ESC</span>
+        <span class="keybind-label">Cancel</span>
+      </button>
+    </div>
+  </section>
+
   <!-- ─── STATISTIK ────────────────────────────────────── -->
-  <section class="stats-grid" aria-label="Statistik inspeksi">
+  <section id="section-stats" class="stats-grid" aria-label="Statistik inspeksi">
 
     <div class="stat-card total">
       <span class="stat-icon">📊</span>
@@ -109,7 +259,7 @@
   </section>
 
   <!-- ─── CHART ────────────────────────────────────────── -->
-  <section class="chart-section" aria-label="Grafik distribusi GOOD vs NOT GOOD">
+  <section id="section-chart" class="chart-section" aria-label="Grafik distribusi GOOD vs NOT GOOD">
     <h2 class="section-title">
       <span>📉</span> Distribusi Hasil Inspeksi
     </h2>
@@ -119,7 +269,7 @@
   </section>
 
   <!-- ─── KLASIFIKASI PER OBJEK ───────────────────────── -->
-  <section class="grouped-section" aria-label="Klasifikasi GOOD/NOT GOOD per nama objek">
+  <section id="section-grouped" class="grouped-section" aria-label="Klasifikasi GOOD/NOT GOOD per nama objek">
     <div class="grouped-header">
       <h2 class="section-title"><span>📦</span> Klasifikasi per Objek</h2>
       <button class="btn-toggle" id="btn-group-toggle" type="button"
@@ -132,6 +282,21 @@
       <input type="search" class="filter-input" id="grouped-search"
              placeholder="🔍 Cari nama objek…" autocomplete="off"
              aria-label="Cari nama objek di tabel klasifikasi" />
+      <div class="object-filter" data-table="grouped">
+        <button type="button" class="object-filter-btn" id="grouped-object-filter-btn"
+                aria-haspopup="true" aria-expanded="false"
+                aria-controls="grouped-object-filter-panel">
+          📦 <span class="object-filter-label">Semua Objek</span> ▾
+        </button>
+        <div class="object-filter-panel" id="grouped-object-filter-panel" role="dialog"
+             aria-label="Pilih nama objek untuk filter klasifikasi" hidden>
+          <div class="object-filter-actions">
+            <button type="button" class="link-btn" data-action="select-all">Pilih Semua</button>
+            <button type="button" class="link-btn" data-action="clear">Hapus Pilihan</button>
+          </div>
+          <ul class="object-filter-list" id="grouped-object-filter-list"></ul>
+        </div>
+      </div>
       <span class="filter-count" id="grouped-count">0 baris</span>
     </div>
 
@@ -139,12 +304,13 @@
       <table id="grouped-table" class="sortable">
         <thead>
           <tr>
-            <th scope="col" data-sort-key="name"   data-sort-type="string">Objek</th>
-            <th scope="col" data-sort-key="total"  data-sort-type="number">Total</th>
-            <th scope="col" data-sort-key="good"   data-sort-type="number">GOOD</th>
-            <th scope="col" data-sort-key="ng"     data-sort-type="number">NOT GOOD</th>
-            <th scope="col" data-sort-key="goodPct" data-sort-type="number">% GOOD</th>
-            <th scope="col" data-sort-key="ngPct"   data-sort-type="number">% NOT GOOD</th>
+            <th scope="col" data-sort-key="name"     data-sort-type="string">Objek</th>
+            <th scope="col" data-sort-key="total"    data-sort-type="number">Total</th>
+            <th scope="col" data-sort-key="good"     data-sort-type="number">GOOD</th>
+            <th scope="col" data-sort-key="ng"       data-sort-type="number">NOT GOOD</th>
+            <th scope="col" data-sort-key="goodPct"  data-sort-type="number">% GOOD</th>
+            <th scope="col" data-sort-key="ngPct"    data-sort-type="number">% NOT GOOD</th>
+            <th scope="col" data-sort-key="lastSeen" data-sort-type="number">Terakhir</th>
           </tr>
         </thead>
         <tbody id="grouped-body"></tbody>
@@ -177,7 +343,7 @@
   </div>
 
   <!-- ─── HISTORY TABLE ────────────────────────────────── -->
-  <section class="history-section" aria-label="Riwayat inspeksi">
+  <section id="section-history" class="history-section" aria-label="Riwayat inspeksi">
 
     <div class="history-header">
       <h2 class="section-title">
@@ -196,6 +362,21 @@
         <option value="GOOD">GOOD</option>
         <option value="NOT GOOD">NOT GOOD</option>
       </select>
+      <div class="object-filter" data-table="history">
+        <button type="button" class="object-filter-btn" id="history-object-filter-btn"
+                aria-haspopup="true" aria-expanded="false"
+                aria-controls="history-object-filter-panel">
+          📦 <span class="object-filter-label">Semua Objek</span> ▾
+        </button>
+        <div class="object-filter-panel" id="history-object-filter-panel" role="dialog"
+             aria-label="Pilih nama objek untuk filter riwayat inspeksi" hidden>
+          <div class="object-filter-actions">
+            <button type="button" class="link-btn" data-action="select-all">Pilih Semua</button>
+            <button type="button" class="link-btn" data-action="clear">Hapus Pilihan</button>
+          </div>
+          <ul class="object-filter-list" id="history-object-filter-list"></ul>
+        </div>
+      </div>
       <span class="filter-count" id="history-count">0 baris</span>
     </div>
 
@@ -232,7 +413,9 @@
     <p style="margin-top:4px;">Auto-refresh setiap <strong>5 detik</strong> &nbsp;·&nbsp; Data disimpan di server</p>
   </footer>
 
-</div><!-- /app-wrapper -->
+    </div><!-- /page-content -->
+  </div><!-- /main-content -->
+</div><!-- /app-shell -->
 
 <!-- ─── TOAST CONTAINER ──────────────────────────────── -->
 <div class="toast-container" id="toast-container" aria-live="polite"></div>

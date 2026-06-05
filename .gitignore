@@ -27,7 +27,10 @@ data/inspections.json
 inspections.json
 
 # ── rembg model cache ───────────────────────────────────────────────
+# Lokasi baru: models/rembg/ (di-set via U2NET_HOME di edge_camera.py).
+# Legacy: .u2net/ (rembg default sebelum kustomisasi).
 .u2net/
+models/
 
 # ── IDE / OS ────────────────────────────────────────────────────────
 .vscode/

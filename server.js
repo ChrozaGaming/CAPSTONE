@@ -45,10 +45,39 @@ const cors = require('cors');
 const { Pool, Client } = require('pg');
 const { WebSocketServer } = require('ws');
 const chokidar = require('chokidar');
+const jwt = require('jsonwebtoken');
 
 const app = express();
 const PORT = Number.parseInt(process.env.PORT || '3000', 10);
 const DATA_FILE = path.join(__dirname, 'data', 'inspections.json');
+
+// ── Auth config (Phase 2) — JWT_SECRET shared dengan VPS Next.js ─────
+const JWT_SECRET = process.env.JWT_SECRET || 'dev-secret-change-in-production-min-32-char-please-rotate';
+const VPS_LOGIN_URL = process.env.VPS_LOGIN_URL || 'http://localhost:3001/login';
+const ALLOW_DEV_TOKEN = String(process.env.ALLOW_DEV_TOKEN || 'true').toLowerCase() === 'true';
+const VALID_ROLES = ['operator', 'supervisor', 'manager'];
+
+if (JWT_SECRET.startsWith('dev-secret-')) {
+  console.warn('[AUTH] ⚠ JWT_SECRET pakai default dev — JANGAN dipakai di production. Set di .env');
+}
+
+/** Sign JWT dengan claims standar. dipakai oleh dev-token endpoint. */
+function signToken(payload, expiresIn = '24h') {
+  return jwt.sign(payload, JWT_SECRET, { expiresIn, algorithm: 'HS256' });
+}
+
+/** Verify JWT. Return { ok, claims, error }. */
+function verifyToken(token) {
+  if (!token || typeof token !== 'string') {
+    return { ok: false, error: 'Token kosong / format salah' };
+  }
+  try {
+    const claims = jwt.verify(token, JWT_SECRET, { algorithms: ['HS256'] });
+    return { ok: true, claims };
+  } catch (e) {
+    return { ok: false, error: e.message || 'Token invalid' };
+  }
+}
 
 app.use(cors());
 app.use(express.json());
@@ -590,6 +619,101 @@ app.delete('/inspection', async (_req, res) => {
   broadcast('inspection.cleared', {});
   console.log('[!] Semua data inspeksi dihapus (JSON-only).');
   res.json({ success: true, source: 'json', message: 'Semua data berhasil dihapus.' });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  ROUTES — AUTH (Phase 2): JWT verify untuk konsumsi token dari VPS Next.js
+// ═════════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/auth/config — return auth-related config untuk frontend.
+ * Dipakai oleh script.js untuk redirect ke VPS login saat token invalid.
+ */
+app.get('/api/auth/config', (_req, res) => {
+  res.json({
+    success: true,
+    data: {
+      vps_login_url: VPS_LOGIN_URL,
+      allow_dev_token: ALLOW_DEV_TOKEN,
+      valid_roles: VALID_ROLES,
+    },
+  });
+});
+
+/**
+ * POST /api/auth/verify — terima { token }, validate signature & expiry.
+ * Return claims (user info + role) untuk frontend gating.
+ *
+ * Body: { token: string }
+ * Response 200: { success: true, data: { user: {...}, expiresAt } }
+ * Response 401: { success: false, message: '...' }
+ */
+app.post('/api/auth/verify', (req, res) => {
+  const token = req.body?.token;
+  const result = verifyToken(token);
+  if (!result.ok) {
+    return res.status(401).json({ success: false, message: result.error });
+  }
+  const claims = result.claims;
+  // Validate role (defense-in-depth)
+  if (!VALID_ROLES.includes(claims.role)) {
+    return res.status(401).json({
+      success: false,
+      message: `Role '${claims.role}' tidak valid. Harus: ${VALID_ROLES.join(', ')}`,
+    });
+  }
+  res.json({
+    success: true,
+    data: {
+      user: {
+        id: claims.sub || claims.id || null,
+        email: claims.email || null,
+        name: claims.name || claims.email || 'User',
+        role: claims.role,
+      },
+      expiresAt: claims.exp ? new Date(claims.exp * 1000).toISOString() : null,
+      issuedAt: claims.iat ? new Date(claims.iat * 1000).toISOString() : null,
+    },
+  });
+});
+
+/**
+ * GET /api/auth/dev-token?role=operator&name=Demo
+ * — Issue token sample untuk testing Phase 2 tanpa Next.js berjalan.
+ * Hanya aktif kalau ALLOW_DEV_TOKEN=true di .env. Disable di production.
+ */
+app.get('/api/auth/dev-token', (req, res) => {
+  if (!ALLOW_DEV_TOKEN) {
+    return res.status(403).json({
+      success: false,
+      message: 'Dev token disabled — set ALLOW_DEV_TOKEN=true di .env',
+    });
+  }
+  const role = String(req.query.role || 'operator').toLowerCase();
+  if (!VALID_ROLES.includes(role)) {
+    return res.status(400).json({
+      success: false,
+      message: `Role harus salah satu: ${VALID_ROLES.join(', ')}`,
+    });
+  }
+  const name = String(req.query.name || `Demo ${role}`);
+  const email = String(req.query.email || `${role}@capstone.dev`);
+  const token = signToken({
+    sub: `dev-${role}`,
+    email,
+    name,
+    role,
+  }, '24h');
+  res.json({
+    success: true,
+    data: {
+      token,
+      role,
+      name,
+      email,
+      hint: `Buka http://localhost:${PORT}/?token=${token} untuk login otomatis`,
+    },
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════

@@ -1,0 +1,142 @@
+// Prisma schema — VPS dashboard database
+//
+// Konvensi:
+//   - Tabel auth (User, Account, Session, VerificationToken) wajib mengikuti
+//     konvensi NextAuth.js v5 + @auth/prisma-adapter.
+//   - Tabel inspections MAP ke schema existing dari local PG (db/schema.sql).
+//     Phase 6 nanti, server.js akan push perubahan local PG → VPS PG via
+//     REST. Field harus persis sama supaya sync idempotent.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Auth tables (NextAuth.js v5 + Prisma Adapter)
+// ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  operator
+  supervisor
+  manager
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  password      String    // bcrypt hash
+  role          Role      @default(operator)
+  edge_url      String?   // operator's local edge URL untuk redirect tombol
+  emailVerified DateTime?
+  image         String?
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts Account[]
+  sessions Session[]
+
+  @@map("users")
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@map("accounts")
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("sessions")
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+  @@map("verification_tokens")
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Audit Log (Phase 5B) — manager-only audit trail
+// ────────────────────────────────────────────────────────────────────
+
+enum AuditAction {
+  user_created
+  user_updated
+  user_deleted
+  user_login
+  user_login_failed
+  user_logout
+  data_exported
+  inspection_deleted
+}
+
+model AuditLog {
+  id          String      @id @default(cuid())
+  action      AuditAction
+  actorId     String?     // user id; null untuk login_failed (user belum auth)
+  actorEmail  String?     // snapshot email — tetap kebaca walau actor di-delete
+  actorRole   String?     // snapshot role saat aksi terjadi
+  targetType  String?     // 'user' | 'inspection' | 'export' | null
+  targetId    String?     // ID target object (kalau ada)
+  metadata    Json?       // detail action: { from: 'operator', to: 'manager', format: 'csv', count: 28, ... }
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime    @default(now())
+
+  @@map("audit_logs")
+  @@index([createdAt(sort: Desc)])
+  @@index([actorId])
+  @@index([action])
+}
+
+// ────────────────────────────────────────────────────────────────────
+// Inspection mirror (sync target dari local PG, Phase 6)
+// ────────────────────────────────────────────────────────────────────
+
+model Inspection {
+  // ID disuplai dari local server.js (sama dengan local PG).
+  // Composite key (id) cukup untuk single-site capstone scope.
+  // NOTE: type harus persis match existing local PG schema supaya
+  // Prisma db push tidak coba alter (yang akan break views existing).
+  id           Int       @id
+  object_name  String?
+  dimension_mm Float     @db.DoublePrecision
+  width_mm     Float?    @db.DoublePrecision
+  confidence   Float?    @db.DoublePrecision
+  status       String    // 'GOOD' | 'NOT GOOD' (CHECK constraint di SQL)
+  timestamp    DateTime  @map("timestamp") @db.Timestamptz(6)
+
+  @@map("inspections")
+  @@index([timestamp(sort: Desc)])
+  @@index([object_name])
+  @@index([status])
+}
