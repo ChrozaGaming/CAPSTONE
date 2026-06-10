@@ -7,6 +7,23 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.6.1] — 2026-06-10
+
+### 🔒 Fixed — Operator "Buka Dashboard Lokal" di Vercel
+
+- Tombol tidak lagi **"muter selamanya"** saat dashboard di-deploy di Vercel.
+  Penyebab: `window.open` dipanggil **setelah** `await fetch(token)` sehingga
+  kehilangan *user-activation* → popup diblokir browser; plus fetch token tanpa
+  timeout (route serverless lambat/menggantung di cold start).
+- **Fix** (`vps-dashboard/components/OperatorLaunchButton.tsx`): buka tab
+  `localhost:3000` secara **sinkron saat klik** (anti popup-block, tab langsung
+  terbuka), ambil token *best-effort* dengan **timeout 6 dtk**, lalu upgrade tab
+  ke URL ber-token kalau token didapat. Kalau token lambat/hang, tab tetap
+  terbuka di `localhost:3000` tanpa token (server.js lokal menangani auth
+  sendiri). Default Edge URL tetap `http://localhost:3000`.
+
+---
+
 ## [2.6.0] — 2026-06-10
 
 ### 🎯 Tema rilis: Runtime DB Source Switch — Local PostgreSQL ⇄ Cloud (Supabase) + Operator Edge UX
