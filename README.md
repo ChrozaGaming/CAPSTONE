@@ -168,7 +168,7 @@ Sistem 3-tier yang berjalan paralel:
 │                                                                      │
 │   Camera capture                                                     │
 │       ↓                                                              │
-│   rembg ML segmentation  (U2-Net via ONNX)                           │
+│   rembg ML segmentation  (isnet via ONNX)                            │
 │       ↓                                                              │
 │   YCrCb skin filter  (buang jari/tangan)                             │
 │       ↓                                                              │
@@ -224,7 +224,7 @@ Sistem 3-tier yang berjalan paralel:
 
 ### 🤖 Segmentasi Objek
 
-- **Neural network mask** via [rembg](https://github.com/danielgatis/rembg) U2-Net (~5MB model)
+- **Neural network mask** via [rembg](https://github.com/danielgatis/rembg) — **default `isnet-general-use` (~170MB) + alpha-matting** (tepi halus). Opsi ringan: `u2netp` (~5MB) via `REMBG_MODEL`
 - **Hand & finger rejection** — 3 lapis pertahanan (skin filter + edge reject + center scoring)
 - **Convex hull stabilization** — bbox tetap stabil saat jari menutup-buka objek
 - **Hull-fill mask preview** — tekan `[V]` untuk visualisasi rapi padat
@@ -276,7 +276,7 @@ Sistem 3-tier yang berjalan paralel:
 | `python` | ≥ 3.10 | Runtime |
 | `opencv-python` | ≥ 4.8 | CV primitives, kontur, threshold, morfologi |
 | `numpy` | ≥ 1.24 | Array ops, median, statistics |
-| `rembg` | ≥ 2.0 | ML background removal (U2-Net) |
+| `rembg` | ≥ 2.0 | ML background removal (default `isnet-general-use` + alpha-matting) |
 | `onnxruntime` | ≥ 1.17 | Backend untuk rembg |
 | `requests` | ≥ 2.31 | HTTP client → backend API |
 
@@ -438,17 +438,25 @@ cd CAPSTONE
 ```bash
 # Buat virtual env di folder .venv/
 python3 -m venv .venv
+```
 
-# Aktifkan venv
-# 🍎 macOS / 🐧 Linux:
+Lalu **aktifkan** venv — pilih baris sesuai OS **dan** shell kamu:
+
+```bash
+# 🍎 macOS / 🐧 Linux  — Terminal default (bash / zsh):
 source .venv/bin/activate
 
-# 🪟 Windows (Command Prompt):
+# 🍎 macOS / 🐧 Linux  — shell fish:
+source .venv/bin/activate.fish
+
+# 🪟 Windows — Command Prompt (cmd, default):
 .venv\Scripts\activate.bat
 
-# 🪟 Windows (PowerShell):
+# 🪟 Windows — PowerShell:
 .venv\Scripts\Activate.ps1
 ```
+
+> 💡 **Tidak tahu pakai shell apa di Mac?** Default macOS adalah **zsh** → pakai baris `source .venv/bin/activate`. Kalau kamu sengaja pasang **fish**, pakai baris `source .venv/bin/activate.fish`.
 
 Setelah aktif, prompt terminal akan punya `(.venv)` di depan:
 
@@ -456,19 +464,21 @@ Setelah aktif, prompt terminal akan punya `(.venv)` di depan:
 (.venv) macbookpro@host CAPSTONE %
 ```
 
-> ⚠️ **Setiap kali buka terminal baru, AKTIFKAN venv dulu** sebelum jalankan `python edge_camera.py`. Tanpa aktivasi, library tidak akan ke-detect.
+> ⚠️ **Setiap kali buka terminal baru, AKTIFKAN venv dulu** sebelum jalankan `python3 edge_camera.py`. Tanpa aktivasi, library tidak akan ke-detect.
 
 ### 📍 Langkah 6 — Install Library Python
 
 ```bash
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
+
+> ⚠️ Pakai **`pip3`** (bukan `pip`). Pastikan venv `(.venv)` aktif dulu — kalau tidak, library masuk ke Python sistem dan tidak ke-detect.
 
 | Detail | Nilai |
 |--------|-------|
-| Total download | ~500 MB |
+| Total download | ~500 MB (library) |
 | Estimasi waktu | 2–5 menit (broadband) |
-| First rembg run | Download U2-Net model (~5MB) ke `~/.u2net/` |
+| Saat **pertama** `python3 edge_camera.py` | Download model **`isnet-general-use`** (~170 MB) ke `./models/rembg/` — **sekali saja**, lalu di-cache (tidak download ulang) |
 
 ### 📍 Langkah 7 — Install Dependency Node.js
 
@@ -478,13 +488,107 @@ npm install
 
 Cepat (~10 detik). Folder `node_modules/` akan terbentuk dengan `express` + `cors`.
 
+### 📍 Langkah 8 — (Opsional) Akselerasi GPU / ONNX Provider
+
+`edge_camera.py` memakai **rembg (ONNX Runtime)** untuk segmentasi. Secara default
+`onnxruntime` (dari `requirements.txt`) sudah jalan dan **otomatis memilih akselerator
+terbaik** untuk OS-mu — lihat baris **`Provider`** di banner startup. Pasang paket
+khusus **HANYA kalau ingin lebih cepat**:
+
+| Platform kamu | Provider | Yang harus dilakukan |
+|---------------|----------|----------------------|
+| 🍎 **macOS** (Apple Silicon / Intel) | **CoreML** (Apple Neural Engine) | **Tidak perlu install apa-apa** — CoreML sudah termasuk di `onnxruntime`. Mac TIDAK pakai DirectML. |
+| 🪟 **Windows + GPU** (AMD/Intel/NVIDIA, DirectX 12) | **DirectML** | `pip3 uninstall -y onnxruntime` lalu `pip3 install onnxruntime-directml` |
+| 🟩 **NVIDIA + CUDA** (Windows/Linux) | **CUDA** | `pip3 uninstall -y onnxruntime` lalu `pip3 install onnxruntime-gpu` |
+| 💻 **Tanpa GPU** / lainnya | **CPU** | Biarkan `onnxruntime` default — tidak perlu apa-apa |
+
+> ⚠️ `onnxruntime-directml` dan `onnxruntime-gpu` **MENGGANTIKAN** `onnxruntime` (jangan
+> pasang dua-duanya sekaligus). Karena itu ada `uninstall` dulu.
+>
+> 💡 Mau paksa provider tertentu? Set env sebelum run, mis. `REMBG_PROVIDER=cpu python3 edge_camera.py`
+> (pilihan: `auto` | `cpu` | `coreml` | `dml` | `cuda`).
+
+### 📍 Langkah 9 — (Opsional) Setup VPS Dashboard (Terminal 3)
+
+**VPS Dashboard** = web supervisor/manager (Next.js, port **3001**). Ini **opsional** —
+inti pengukuran cukup Terminal 1 (edge) + Terminal 2 (server). Kalau mau pakai:
+
+```bash
+cd vps-dashboard
+npm install
+
+# Buat file .env dari contoh, lalu isi DATABASE_URL + NEXTAUTH_SECRET
+cp .env.example .env          # 🍎🐧
+# copy .env.example .env       # 🪟 Windows cmd
+
+npx prisma generate
+npx prisma db push            # buat tabel di database
+npm run prisma:seed           # buat akun login awal (operator/supervisor/manager)
+```
+
+> ⚠️ **`NEXTAUTH_SECRET`** di `vps-dashboard/.env` HARUS **sama persis** dengan
+> **`JWT_SECRET`** di `.env` root (dibaca `server.js`) — supaya token login operator
+> valid saat membuka dashboard lokal. Generate satu: `openssl rand -base64 48`.
+
 ---
 
 ## ▶️ Cara Menjalankan
 
-Sistem terdiri dari **DUA program** yang harus jalan **BERSAMAAN** di **DUA terminal terpisah**:
+Sistem terdiri dari **3 program** yang jalan **BERSAMAAN** di **3 terminal terpisah**.
+Buka 3 jendela terminal, di tiap terminal `cd` ke folder project dulu.
 
-### 🖥️ Terminal 1 — Backend Server
+> 💡 **Tips urutan:** nyalakan **Terminal 2 (backend)** dulu atau bersamaan, supaya data
+> inspeksi dari edge langsung tersimpan. Tapi edge tetap aman kalau server telat nyala
+> (data di-antri & dikirim ulang saat server siap).
+
+### 📷 Terminal 1 — Edge Camera (Python)
+
+```bash
+cd ~/Documents/CAPSTONE
+
+# Aktifkan venv (pilih sesuai OS + shell — sama seperti Langkah 5):
+source .venv/bin/activate          # 🍎🐧 bash / zsh
+# source .venv/bin/activate.fish   # 🍎🐧 fish
+# .venv\Scripts\activate.bat       # 🪟 Windows cmd
+# .venv\Scripts\Activate.ps1       # 🪟 Windows PowerShell
+
+python3 edge_camera.py
+```
+
+Saat **pertama kali** dijalankan, banner default akan muncul — **rembg + alpha-matting
+sudah NYALA otomatis** (tidak perlu setting apa pun):
+
+```
+  Mode awal  : STATIC (mount)
+  Segmentasi : rembg / isnet-general-use + alpha-matting @768px
+  Provider   : CoreML (Apple Neural Engine)  (override: REMBG_PROVIDER=auto|cpu|coreml|dml|cuda)
+  Pipeline   : async (worker thread)
+  Model dir  : ./models/rembg/ (cached, tidak download ulang)
+  Override   : REMBG_MODEL=<name>  REMBG_ALPHA_MATTING=1
+               REMBG_INFERENCE_MAX_SIDE=N (0=native)  REMBG_ASYNC=0
+```
+
+> 💡 Baris **`Provider`** menyesuaikan OS otomatis: **CoreML** (macOS), **DirectML**
+> (Windows GPU), **CUDA** (NVIDIA), atau **CPU**. Saat run pertama, model
+> `isnet-general-use` (~170 MB) diunduh ke `./models/rembg/` lalu di-cache.
+
+Lalu sistem akan:
+1. 📹 Detect kamera (atau tampilkan list jika ada lebih dari satu)
+2. 🎯 Pilih kamera yang akan dipakai
+3. 🧙 **Jika belum kalibrasi**: jalankan wizard kalibrasi otomatis
+4. 🔍 Setelah kalibrasi: masuk **mode inspeksi**
+
+#### 🎬 Argumen CLI Opsional
+
+```bash
+python3 edge_camera.py --camera 0     # Skip selector, pakai kamera index 0
+python3 edge_camera.py -c 1           # Shorthand
+python3 edge_camera.py --camera=2     # Format =
+```
+
+### 🖥️ Terminal 2 — Backend Server (Node.js)
+
+Buka **terminal baru** (jangan tutup yang lain!):
 
 ```bash
 cd ~/Documents/CAPSTONE
@@ -501,38 +605,27 @@ Output yang diharapkan:
 
 > 🔓 **Biarkan terminal ini terbuka.** Server jalan terus selama terminal aktif. Jangan tutup.
 
-### 📷 Terminal 2 — Edge Camera
+### 🌐 Terminal 3 — VPS Dashboard (Next.js) — *opsional*
 
-Buka **terminal baru** (jangan tutup yang pertama!):
-
-```bash
-cd ~/Documents/CAPSTONE
-source .venv/bin/activate           # 🍎🐧
-# .venv\Scripts\activate.bat        # 🪟 CMD
-# .venv\Scripts\Activate.ps1        # 🪟 PowerShell
-
-python edge_camera.py
-```
-
-Sistem akan:
-1. 📹 Detect kamera (atau tampilkan list jika ada lebih dari satu)
-2. 🎯 Pilih kamera yang akan dipakai
-3. 🧙 **Jika belum kalibrasi**: jalankan wizard kalibrasi otomatis
-4. 🔍 Setelah kalibrasi: masuk **mode inspeksi**
-
-#### 🎬 Argumen CLI Opsional
+Hanya kalau kamu sudah setup [Langkah 9](#-langkah-9--opsional-setup-vps-dashboard-terminal-3).
+Buka **terminal baru**:
 
 ```bash
-python edge_camera.py --camera 0     # Skip selector, pakai kamera index 0
-python edge_camera.py -c 1           # Shorthand
-python edge_camera.py --camera=2     # Format =
+cd ~/Documents/CAPSTONE/vps-dashboard
+npm run dev
 ```
 
-### 🌐 Browser — Dashboard
+Jalan di **http://localhost:3001** (login supervisor/manager).
 
-Buka browser, akses: **http://localhost:3000**
+### 🌐 Buka di Browser
 
-> ⚠️ **JANGAN** double-click `index.html` dari file explorer. **Selalu** akses via `http://localhost:3000`. Kalau tidak, fetch API gagal karena CORS.
+| Dashboard | URL | Untuk |
+|-----------|-----|-------|
+| **Operator** (lokal) | http://localhost:3000 | Monitoring inspeksi real-time + live camera |
+| **VPS** (opsional) | http://localhost:3001 | Web supervisor/manager (login, export, audit) |
+
+> ⚠️ **JANGAN** double-click `index.html` dari file explorer. **Selalu** akses via
+> `http://localhost:3000`. Kalau tidak, fetch API gagal karena CORS.
 
 ### ⌨️ Hotkey saat Running
 
@@ -700,7 +793,7 @@ Setelah kalibrasi + paling tidak satu profil teregister:
 │                       PERTAMA KALI RUN                               │
 └──────────────────────────────────────────────────────────────────────┘
 
-  python edge_camera.py
+  python3 edge_camera.py
        │
        ▼
   Cek calibration.json ada?
@@ -801,9 +894,9 @@ Setelah kalibrasi + paling tidak satu profil teregister:
 
 ## 🔬 Detail Teknis Algoritma
 
-### 🤖 1. Background Removal — rembg + U2-Net
+### 🤖 1. Background Removal — rembg + isnet-general-use
 
-**Model**: U2-Net trained pada [DUTS dataset](http://saliencydetection.net/duts/) untuk salient object detection. Run di **ONNX Runtime** untuk cross-platform.
+**Model default**: `isnet-general-use` (~170MB, keluarga IS-Net) untuk salient object detection dengan tepi tajam, dipadu **alpha-matting** (trimap-based edge refinement, default **ON**). Alternatif via `REMBG_MODEL`: `u2netp` (~5MB, ringan/cepat) atau `birefnet-general-lite`. Jalan di **ONNX Runtime** (cross-platform; provider CoreML/DirectML/CUDA/CPU dipilih otomatis).
 
 **Pipeline**:
 ```python
@@ -1220,7 +1313,7 @@ CAPSTONE/
 **Phone webcam (DroidCam/iVCam)**:
 - Pastikan app HP **dan** PC sudah connected
 - Test di app sumber (preview di app DroidCam dulu)
-- Coba `python edge_camera.py --camera 1` untuk index lain
+- Coba `python3 edge_camera.py --camera 1` untuk index lain
 
 ### 🔴 Wizard kalibrasi gagal "KTP tidak terdeteksi"
 
@@ -1253,20 +1346,20 @@ CAPSTONE/
 **Solusi**:
 ```bash
 rm calibration.json
-python edge_camera.py
+python3 edge_camera.py
 # Wizard otomatis muncul ulang, recalibrate
 ```
 
-### 🔴 `pip install` error: "externally-managed-environment"
+### 🔴 `pip3 install` error: "externally-managed-environment"
 
-**Penyebab**: Homebrew Python (macOS) atau Debian Python tidak izinkan pip install global.
+**Penyebab**: Homebrew Python (macOS) atau Debian Python tidak izinkan pip3 install global.
 
 **Solusi**: PAKAI virtual environment (Langkah 5 di [Instalasi](#-instalasi-untuk-pemula-sama-sekali))
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ### 🔴 Server "Cannot find module 'express'"
@@ -1300,12 +1393,14 @@ node server.js
 
 ### 🟠 rembg lambat (1-2 fps)
 
-**Penyebab**: u2netp model run di CPU. Sesuai design.
+**Penyebab**: model default `isnet-general-use` + alpha-matting jalan di **CPU**. Akurasi tinggi, tapi berat tanpa akselerator.
 
-**Mitigasi**:
-- Sudah cukup untuk demo workflow (HP holds card, take measurement)
-- Untuk speed: install `onnxruntime-gpu` jika punya CUDA GPU
-- Atau ganti model: edit di `edge_camera.py` `_get_rembg_session("u2netp")` jadi `"silueta"` (lebih cepat tapi kurang akurat)
+**Mitigasi** (urut dari paling mudah):
+- **Pasang provider GPU** sesuai OS-mu — lihat [Langkah 8](#-langkah-8--opsional-akselerasi-gpu--onnx-provider) (CoreML otomatis di Mac, DirectML di Windows GPU, CUDA di NVIDIA).
+- **Matikan alpha-matting** (paling cepat naik FPS): jalankan `REMBG_ALPHA_MATTING=0 python3 edge_camera.py`.
+- **Turunkan resolusi inferensi**: `REMBG_INFERENCE_MAX_SIDE=512 python3 edge_camera.py` (default 768).
+- **Ganti model lebih ringan**: `REMBG_MODEL=u2netp python3 edge_camera.py` (~5 MB, lebih cepat tapi tepi kurang halus).
+- Untuk demo (HP pegang kartu lalu ukur), kecepatan default biasanya sudah cukup.
 
 ### 🔴 ImportError: cannot import name 'rembg' / 'cv2'
 
@@ -1317,10 +1412,10 @@ node server.js
 source .venv/bin/activate    # macOS/Linux
 
 # Cek installed
-pip list | grep -E "rembg|opencv"
+pip3 list | grep -E "rembg|opencv"
 
 # Re-install kalau perlu
-pip install -r requirements.txt
+pip3 install -r requirements.txt
 ```
 
 ---
