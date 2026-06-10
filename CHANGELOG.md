@@ -7,6 +7,62 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.6.0] — 2026-06-10
+
+### 🎯 Tema rilis: Runtime DB Source Switch — Local PostgreSQL ⇄ Cloud (Supabase) + Operator Edge UX
+
+Versi ini menambahkan **toggle sumber database saat runtime** di dashboard
+operator: pindah antara PostgreSQL lokal dan Supabase (cloud) **tanpa restart**,
+lengkap dengan persistensi pilihan, rollback otomatis, dan self-healing reconnect.
+Ditambah perbaikan UX tombol *"Buka Dashboard Lokal"* di `vps-dashboard` supaya
+tidak membuka tab mati saat diakses dari origin remote (Vercel).
+
+**Backwards-compatible** dengan v2.5.0: default `DB_MODE=local`; `edge_camera.py`,
+pipeline kalibrasi, dan skema storage tidak disentuh.
+
+### ✨ Added — DB Source Switch (local ⇄ cloud)
+
+- **Toggle Local/Cloud** di connection-bar dashboard (`index.html`, `script.js`,
+  `style.css`) — klik untuk pindah sumber DB; broadcast `db.mode_changed` via
+  WebSocket ke semua dashboard yang terhubung.
+- **`switchDatabase()`** di `server.js`: tear-down pool + LISTEN client lama →
+  rebuild ke target baru. Pilihan dipersist ke `data/db_mode.json` (diingat saat
+  restart). **Rollback otomatis** ke mode sebelumnya kalau target baru gagal
+  konek. **Self-heal** reconnect kalau pool & rollback dua-duanya gagal.
+- **Endpoint** `GET /api/db/mode` (status mode aktif) & `POST /api/db/mode`
+  (switch runtime), dengan validasi mode + guard ketersediaan tiap mode.
+- Helper `pgConfigFor` / `cloudUrl` / `describeTarget` / `dbStatus`; `/api/v1/status`
+  dan WS `hello` kini melaporkan mode DB aktif.
+- Env baru: `DB_MODE` (default `local`) & `SUPABASE_DB_URL` (`.env.example`).
+
+### 🔒 Fixed — Konkurensi & Koneksi Cloud
+
+- **SSL Supabase**: `sslmode` di-strip dari connection string + `ssl: { rejectUnauthorized: false }`
+  supaya cert pooler diterima (sebelumnya gagal `self-signed certificate in chain`).
+- **LISTEN/NOTIFY**: `cloudUrl()` memprioritaskan connection string port `:5432`
+  (session pooler) di atas `:6543`; peringatan keras kalau dipakai pooler `:6543`
+  (transaction/pgbouncer) yang tidak mendukung LISTEN/NOTIFY.
+- **Race condition**: `initPostgres` / `setupPgListener` memakai pola *local-commit*
+  + generation guard — pool/client dibangun di variabel lokal, commit ke global
+  hanya setelah ping sukses & generation cocok. Mencegah stale init meng-clobber
+  pool yang lebih baru, leak pool, atau state `pgReady=true` tapi `pgPool=null`.
+- **Pool leak**: pool ditutup saat skema tidak ada / init gagal (tidak dibiarkan
+  menggantung saat `initPostgres` dipanggil ulang).
+- Switch konkuren diserialisasi via flag `switching` (request kedua → HTTP 409).
+
+### ✨ Added — Operator Edge UX (`vps-dashboard`)
+
+- **`OperatorLaunchButton`**: deteksi kalau dashboard diakses dari origin non-lokal
+  (mis. Vercel) tapi Edge URL masih `localhost` → tampilkan peringatan jelas +
+  tombol *"Tetap buka"*, alih-alih membuka tab yang loading selamanya. Default
+  Edge URL tetap `http://localhost:3000`.
+
+### 🔧 Changed
+
+- `.gitignore`: abaikan `data/db_mode.json` (runtime state, machine-specific).
+
+---
+
 ## [2.5.0] — 2026-05-11
 
 ### 🎯 Tema rilis: Segmentation Pipeline Upgrade — ISNet + Alpha-Matting + Shadow Removal + Async Inference Worker + GPU Acceleration (CoreML / DirectML / CUDA)
