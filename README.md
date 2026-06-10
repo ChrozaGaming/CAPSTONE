@@ -508,6 +508,55 @@ khusus **HANYA kalau ingin lebih cepat**:
 > 💡 Mau paksa provider tertentu? Set env sebelum run, mis. `REMBG_PROVIDER=cpu python3 edge_camera.py`
 > (pilihan: `auto` | `cpu` | `coreml` | `dml` | `cuda`).
 
+### 📦 Model Segmentasi — kenapa `isnet-general-use`? (+ link download manual)
+
+`edge_camera.py` memakai **`isnet-general-use`** sebagai model **default & prioritas utama**.
+Saat pertama `python3 edge_camera.py`, rembg **otomatis mengunduh** model ini ke
+`./models/rembg/` (sekali saja, lalu di-cache) — jadi **download manual TIDAK wajib**.
+Bagian ini berguna kalau koneksi lambat, mesin offline, atau mau coba model alternatif.
+
+#### 🏆 Kenapa `isnet-general-use` dipilih (bukan birefnet / u2netp)?
+
+| Aspek | **isnet-general-use** (dipakai) | birefnet-general-lite | u2netp |
+|-------|--------------------------------|----------------------|--------|
+| Ukuran | ~170 MB | ~214 MB | ~5 MB |
+| Kualitas tepi | Tinggi (mendekati remove.bg) | Paling halus (SOTA) | Kasar |
+| Stabilitas antar-frame | **Stabil — mask tidak flicker** | Stabil | Flicker (mask goyang) |
+| Kecepatan (CPU / Mac CoreML) | **Real-time — sweet spot** | ~3–5× lebih lambat (butuh GPU) | Tercepat |
+
+**Alasan utama**: untuk **pengukuran dimensi**, yang krusial bukan cuma ketajaman tepi
+tapi **konsistensi mask antar-frame** — kalau mask flicker, nilai L/W ikut goyang walau
+objek diam. `isnet-general-use` memberi **tepi tajam + mask stabil** sekaligus tetap
+**real-time di CPU/Mac (CoreML)** tanpa GPU diskrit. `birefnet-general-lite` tepinya
+sedikit lebih halus tapi **terlalu lambat di CPU** untuk inspeksi real-time (butuh GPU);
+`u2netp` cepat & ringan tapi tepinya kasar & flicker → pengukuran kurang stabil.
+
+#### ⬇️ Link Download Manual (opsional)
+
+Letakkan file di `./models/rembg/` dengan **nama persis** seperti kolom terakhir:
+
+| Model | Link download (rembg release resmi) | Simpan sebagai (`models/rembg/`) |
+|-------|-------------------------------------|----------------------------------|
+| **`isnet-general-use`** (default) | https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx | `isnet-general-use.onnx` *(nama sama, tanpa rename)* |
+| `birefnet-general-lite` (opsional) | https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx | `birefnet-general-lite.onnx` ⚠️ **RENAME** dari nama unduhan |
+
+```bash
+# Download manual (macOS / Linux) ke folder cache rembg
+mkdir -p models/rembg
+
+# isnet-general-use (default) — nama file sudah cocok
+curl -L -o models/rembg/isnet-general-use.onnx \
+  https://github.com/danielgatis/rembg/releases/download/v0.0.0/isnet-general-use.onnx
+
+# birefnet-general-lite (opsional) — flag -o otomatis RENAME ke nama cache yang benar
+curl -L -o models/rembg/birefnet-general-lite.onnx \
+  https://github.com/danielgatis/rembg/releases/download/v0.0.0/BiRefNet-general-bb_swin_v1_tiny-epoch_232.onnx
+```
+
+> 💡 Pakai model alternatif tanpa mengubah default: `REMBG_MODEL=birefnet-general-lite python3 edge_camera.py`.
+> Model super ringan untuk Raspberry Pi: `REMBG_MODEL=u2netp python3 edge_camera.py`.
+> Tanpa `REMBG_MODEL`, sistem **selalu** memakai `isnet-general-use`.
+
 ### 📍 Langkah 9 — (Opsional) Setup VPS Dashboard (Terminal 3)
 
 **VPS Dashboard** = web supervisor/manager (Next.js, port **3001**). Ini **opsional** —
