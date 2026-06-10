@@ -7,6 +7,22 @@ dan project ini mengikuti [Semantic Versioning](https://semver.org/spec/v2.0.0.h
 
 ---
 
+## [2.6.2] — 2026-06-10
+
+### 🔒 Fixed — Operator "Buka Dashboard Lokal" diblokir popup di Chrome
+
+- Chrome tetap memblokir `window.open` sebagai popup walau dipanggil sinkron &
+  izin sudah diberikan (Safari lebih longgar). v2.6.1 masih kena ini.
+- **Fix** (`vps-dashboard/components/OperatorLaunchButton.tsx`): hapus
+  `window.open` total, ganti dengan elemen `<a target="_blank">` asli — klik
+  user pada anchor adalah navigasi biasa, bukan popup, jadi **tidak pernah
+  diblokir** di Chrome/Safari/Firefox. Token di-**pra-ambil** saat halaman dibuka
+  + refresh saat tab fokus (token valid 15 mnt), sehingga `href` sudah berisi
+  token saat diklik. Kalau route token lambat/hang, `href` fallback ke edge
+  tanpa token. Default Edge URL tetap `http://localhost:3000`.
+
+---
+
 ## [2.6.1] — 2026-06-10
 
 ### 🔒 Fixed — Operator "Buka Dashboard Lokal" di Vercel
