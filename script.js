@@ -95,6 +95,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshTimer = setInterval(fetchAndRender, REFRESH_MS);
   setInterval(fetchPending, PENDING_MS);
   connectWebSocket();
+  initDbSwitch();                              // Tombol switch sumber DB (local/cloud)
 
   // Live camera stream (WS-binary JPEG dari edge_camera.py)
   initLiveCameraButtons();
@@ -166,7 +167,14 @@ function handleWsEvent(msg) {
   if (!msg?.type) return;
   switch (msg.type) {
     case 'hello':
-      console.log('[WS] hello — pgReady:', msg.data?.pgReady);
+      console.log('[WS] hello — pgReady:', msg.data?.pgReady, '· dbMode:', msg.data?.mode);
+      if (msg.data?.mode) renderDbSwitch(msg.data);
+      break;
+
+    case 'db.mode_changed':
+      // Server pindah sumber DB (local ↔ cloud). Update tombol + re-fetch data.
+      renderDbSwitch(msg.data);
+      fetchAndRender();
       break;
 
     case 'inspection.created':
@@ -199,6 +207,86 @@ function setWsIndicator(online) {
   el.title = online
     ? 'Realtime WebSocket aktif — update tanpa delay'
     : 'WebSocket offline — fallback polling 15s';
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// 0c. DB SOURCE SWITCH (Local ↔ Cloud / Supabase)
+// ─────────────────────────────────────────────────────────────────────
+/**
+ * Tombol Local/Cloud di connection-bar. Klik → POST /api/db/mode →
+ * server tear-down pool+listener lama lalu rebuild ke target baru,
+ * broadcast 'db.mode_changed' ke semua dashboard.
+ */
+let dbSwitchState = null;
+
+async function initDbSwitch() {
+  const box = document.getElementById('db-switch');
+  if (!box) return;
+  box.querySelectorAll('.db-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchDbSource(btn.dataset.mode));
+  });
+  try {
+    const r = await fetch('/api/db/mode');
+    renderDbSwitch(await r.json());
+  } catch (e) {
+    console.warn('[DB] gagal ambil mode:', e.message);
+  }
+}
+
+function renderDbSwitch(state) {
+  if (!state || !state.mode) return;
+  dbSwitchState = state;
+  const box = document.getElementById('db-switch');
+  if (!box) return;
+  box.hidden = false;
+  box.querySelectorAll('.db-btn').forEach(btn => {
+    const mode  = btn.dataset.mode;
+    const avail = state.available ? state.available[mode] : true;
+    btn.classList.toggle('active', state.mode === mode);
+    btn.classList.remove('is-busy');
+    btn.disabled = !avail;
+    btn.title = !avail
+      ? (mode === 'cloud' ? 'Set SUPABASE_DB_URL di .env dulu' : 'Set PG_PASSWORD di .env dulu')
+      : (state.mode === mode ? `Aktif: ${state.target || mode}` : `Pindah ke ${mode}`);
+  });
+}
+
+async function switchDbSource(mode) {
+  if (!mode || (dbSwitchState && dbSwitchState.mode === mode)) return;
+  const box  = document.getElementById('db-switch');
+  const btns = box ? box.querySelectorAll('.db-btn') : [];
+  btns.forEach(b => { b.disabled = true; if (b.dataset.mode === mode) b.classList.add('is-busy'); });
+
+  const label = mode === 'cloud' ? 'Cloud (Supabase)' : 'Local';
+  showToast(`Mengganti sumber DB ke ${label}…`, 'info');
+  try {
+    const r = await fetch('/api/db/mode', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await r.json();
+    if (data.success) {
+      renderDbSwitch(data);
+      showToast(`Sumber DB: ${label} ✓`, 'info');
+      fetchAndRender();
+    } else {
+      // Gagal — kembalikan tampilan ke state server (kalau ada) + pesan error
+      resetDbButtons(btns);                  // pastikan tombol tidak nyangkut busy/disabled
+      renderDbSwitch(data.mode ? data : (dbSwitchState || {}));
+      showToast(data.message || 'Gagal ganti sumber DB', 'error');
+    }
+  } catch (e) {
+    resetDbButtons(btns);                    // tetap reset walau respons bukan JSON / network error
+    renderDbSwitch(dbSwitchState || {});
+    showToast(`Gagal ganti sumber DB: ${e.message}`, 'error');
+  }
+}
+
+// Reset state visual tombol (dipakai di jalur gagal — renderDbSwitch early-return
+// kalau data tak punya .mode, jadi tombol bisa nyangkut disabled/is-busy tanpa ini).
+function resetDbButtons(btns) {
+  btns.forEach(b => { b.classList.remove('is-busy'); b.disabled = false; });
 }
 
 // ─────────────────────────────────────────────────────────────────────

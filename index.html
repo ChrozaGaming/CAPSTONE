@@ -106,6 +106,11 @@
   <div class="connection-bar disconnected" id="connection-status" role="status" aria-live="polite">
     <span id="conn-icon">⬤</span>
     <span id="conn-text">Menghubungkan ke server…</span>
+    <div class="db-switch" id="db-switch" role="group" aria-label="Sumber database" hidden>
+      <span class="db-switch-label">Sumber DB</span>
+      <button type="button" class="db-btn" data-mode="local" id="db-btn-local">Local</button>
+      <button type="button" class="db-btn" data-mode="cloud" id="db-btn-cloud">Cloud</button>
+    </div>
   </div>
 
   <!-- ─── PENDING OBJECT NAMING ───────────────────────── -->

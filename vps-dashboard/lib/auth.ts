@@ -1,5 +1,14 @@
 /**
  * NextAuth.js v5 config — Credentials provider (email + password).
+ *
+ * Strategy: JWT-based session (bukan database-backed Session model)
+ * supaya:
+ * 1. Token bisa di-share ke local server.js untuk verify
+ * 2. Stateless — tidak butuh DB roundtrip per request
+ *
+ * Adapter Prisma TETAP dipakai untuk:
+ * - Lookup user di User table (Credentials authorize)
+ * - Future: link OAuth accounts (Account table)
  */
 import NextAuth, { type NextAuthConfig } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
@@ -18,11 +27,12 @@ const CredentialsSchema = z.object({
 
 export const authConfig = {
   adapter: PrismaAdapter(prisma) as any,
+  // Pakai JWT strategy supaya cookie token bisa di-share dengan local server.js.
   session: { strategy: 'jwt' },
   secret:  process.env.NEXTAUTH_SECRET,
   pages: {
     signIn: '/login',
-    error:  '/login', // Mencegah NextAuth melempar ke halaman error default HTML jika DB crash
+    error:  '/login', // Jika database crash/kredensial salah, kunci ke /login agar tidak memicu loop 307 default
   },
   providers: [
     Credentials({
@@ -35,9 +45,8 @@ export const authConfig = {
         try {
           const parsed = CredentialsSchema.safeParse(raw);
           if (!parsed.success) {
-            // Disesuaikan ke ENUM 'DELETE' atau sejenisnya, atau bungkus aman agar tidak mematikan auth jika gagal log
             await logAudit({
-              action:     'LOGIN',
+              action:     'LOGIN' as any, // Cast 'as any' mencegah error kompilasi TypeScript di Vercel
               actorEmail: typeof (raw as any)?.email === 'string' ? (raw as any).email : null,
               metadata:   { reason: 'invalid input format', success: false },
             }).catch(() => null);
@@ -49,7 +58,7 @@ export const authConfig = {
 
           if (!user) {
             await logAudit({
-              action:     'LOGIN',
+              action:     'LOGIN' as any,
               actorEmail: email,
               metadata:   { reason: 'user not found', success: false },
             }).catch(() => null);
@@ -59,7 +68,7 @@ export const authConfig = {
           const ok = await bcrypt.compare(password, user.password);
           if (!ok) {
             await logAudit({
-              action:     'LOGIN',
+              action:     'LOGIN' as any,
               actorEmail: email,
               actorRole:  user.role,
               metadata:   { reason: 'wrong password', success: false },
@@ -69,7 +78,7 @@ export const authConfig = {
 
           // Sukses Login
           await logAudit({
-            action:     'LOGIN',
+            action:     'LOGIN' as any,
             actorId:    user.id,
             actorEmail: user.email,
             actorRole:  user.role,
@@ -83,7 +92,7 @@ export const authConfig = {
             role:  user.role as Role,
           };
         } catch (error) {
-          // KUNCI UTAMA: Jika kredensial DB Vercel bermasalah, tangkap di sini agar tidak memicu loop crash
+          // Menangkap error jika serverless DB drop atau kredensial env salah, mencegah crash loop 307
           console.error("CRITICAL AUTH ERROR (SUPABASE/PRISMA):", error);
           return null;
         }
@@ -91,6 +100,9 @@ export const authConfig = {
     }),
   ],
   callbacks: {
+    /**
+     * Pass `role` ke JWT supaya tersedia di client session.
+     */
     async jwt({ token, user }) {
       if (user) {
         token.role = (user as any).role;
@@ -98,6 +110,9 @@ export const authConfig = {
       }
       return token;
     },
+    /**
+     * Expose role + id ke session.user untuk consumption di client.
+     */
     async session({ session, token }) {
       if (session.user && token) {
         (session.user as any).id   = token.id;
@@ -105,15 +120,16 @@ export const authConfig = {
       }
       return session;
     },
+    /**
+     * Authorize callback (middleware) — gating per-path berdasar role.
+     */
     authorized({ auth, request: { nextUrl } }) {
       const isLoggedIn = !!auth?.user;
       const isOnLogin  = nextUrl.pathname.startsWith('/login');
 
       if (isOnLogin) {
-        if (isLoggedIn) {
-          // Pakai konstruktor URL murni agar redirect di App Router Vercel stabil
-          return Response.redirect(new URL('/dashboard', nextUrl.origin));
-        }
+        // Gunakan nextUrl.origin untuk stabilitas redirect absolute string di Vercel Production
+        if (isLoggedIn) return Response.redirect(new URL('/dashboard', nextUrl.origin));
         return true;
       }
       return isLoggedIn;
@@ -125,7 +141,7 @@ export const authConfig = {
         const token = message?.token;
         if (token) {
           await logAudit({
-            action:     'LOGOUT',
+            action:     'LOGOUT' as any,
             actorId:    token.id ?? token.sub ?? null,
             actorEmail: token.email ?? null,
             actorRole:  token.role ?? null,

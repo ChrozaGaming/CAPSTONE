@@ -127,36 +127,219 @@ function writeDataInternal(data) {
 let pgPool = null;
 let pgReady = false;
 
-async function initPostgres() {
-  const cfg = {
+// ═════════════════════════════════════════════════════════════════════════════
+//  DB SOURCE SWITCH — local PostgreSQL ↔ cloud (Supabase)
+//
+//  Mode aktif disimpan ke data/db_mode.json supaya restart inget pilihan
+//  terakhir. Default: env DB_MODE → 'local'. Switch runtime via
+//  POST /api/db/mode → tear-down pool + listener → rebuild ke target baru.
+//
+//  CATATAN PENTING (Supabase):
+//   - Cloud WAJIB SSL (rejectUnauthorized:false untuk cert pooler).
+//   - LISTEN/NOTIFY HANYA jalan di port 5432 (direct / session pooler),
+//     TIDAK di 6543 (transaction pooler/pgbouncer). Karena CDC kita pakai
+//     LISTEN/NOTIFY, SUPABASE_DB_URL HARUS pakai connection string :5432.
+// ═════════════════════════════════════════════════════════════════════════════
+const DB_MODE_FILE = path.join(__dirname, 'data', 'db_mode.json');
+const VALID_DB_MODES = ['local', 'cloud'];
+
+function readDbMode() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(DB_MODE_FILE, 'utf8'));
+    if (VALID_DB_MODES.includes(raw.mode)) return raw.mode;
+  } catch { /* file belum ada → pakai env/default */ }
+  const envMode = String(process.env.DB_MODE || 'local').toLowerCase();
+  return VALID_DB_MODES.includes(envMode) ? envMode : 'local';
+}
+
+function writeDbMode(mode) {
+  try { fs.writeFileSync(DB_MODE_FILE, JSON.stringify({ mode }, null, 2)); }
+  catch (e) { console.warn(`[DB] gagal simpan db_mode.json: ${e.message}`); }
+}
+
+let dbMode = readDbMode();
+let switching = false;
+let dbGeneration = 0;   // naik tiap switch; reconnect in-flight abort kalau berubah
+
+// Connection string Supabase (cloud). Urutan fallback supaya kompatibel
+// dengan env yang di-generate Vercel/Supabase integration.
+function cloudUrl() {
+  // Prioritaskan var yang mendukung LISTEN/NOTIFY (port :5432). DATABASE_URL
+  // hasil auto-generate Vercel/Supabase biasanya pooler :6543 (pgbouncer) yang
+  // TIDAK mendukung LISTEN/NOTIFY → taruh paling akhir sbg fallback terakhir.
+  return process.env.SUPABASE_DB_URL
+      || process.env.POSTGRES_URL_NON_POOLING
+      || process.env.DATABASE_URL
+      || '';
+}
+
+// Apakah mode tsb sudah dikonfigurasi (bisa dikonek)?
+function isModeAvailable(mode) {
+  return mode === 'cloud' ? !!cloudUrl() : !!process.env.PG_PASSWORD;
+}
+
+// Config pg untuk mode tertentu — HANYA field valid pg (dipakai Pool & Client).
+function pgConfigFor(mode) {
+  if (mode === 'cloud') {
+    const raw = cloudUrl();
+    if (!raw) return null;
+    // Buang `sslmode` dari URL supaya tidak bentrok dengan ssl object di bawah.
+    // pg versi baru memproses sslmode=require sebagai verify → menolak cert
+    // self-signed Supabase pooler. Yang menentukan harus ssl object, bukan query.
+    let connectionString = raw;
+    try {
+      const u = new URL(raw);
+      u.searchParams.delete('sslmode');
+      connectionString = u.toString();
+    } catch { /* URL non-standar → pakai apa adanya */ }
+    // ssl object = satu-satunya sumber kebenaran. rejectUnauthorized:false
+    // menerima cert chain Supabase (tetap terenkripsi, hanya skip verifikasi CA).
+    return { connectionString, ssl: { rejectUnauthorized: false } };
+  }
+  return {
     host: process.env.PG_HOST || 'localhost',
     port: Number.parseInt(process.env.PG_PORT || '5432', 10),
     user: process.env.PG_USER || 'postgres',
     password: process.env.PG_PASSWORD || '',
     database: process.env.PG_DATABASE || 'capstone',
   };
+}
 
-  if (!cfg.password) {
+// String aman (tanpa password) untuk log & /api status.
+function describeTarget(mode) {
+  if (mode === 'cloud') {
+    const url = cloudUrl();
+    if (!url) return 'cloud (SUPABASE_DB_URL belum di-set)';
+    try {
+      const u = new URL(url);
+      return `${u.username}@${u.hostname}:${u.port || '5432'}${u.pathname}`;
+    } catch { return 'cloud (Supabase)'; }
+  }
+  const u = process.env.PG_USER || 'postgres';
+  const h = process.env.PG_HOST || 'localhost';
+  const p = process.env.PG_PORT || '5432';
+  const d = process.env.PG_DATABASE || 'capstone';
+  return `${u}@${h}:${p}/${d}`;
+}
+
+// Status DB ringkas — dipakai endpoint, WS hello, & broadcast. Tanpa secret.
+function dbStatus() {
+  return {
+    mode: dbMode,
+    pgReady,
+    target: describeTarget(dbMode),
+    available: { local: isModeAvailable('local'), cloud: isModeAvailable('cloud') },
+  };
+}
+
+// Switch sumber DB at runtime: tear-down pool + listener → rebuild ke mode baru.
+// Idempotent kalau mode sama & sudah konek. Dilindungi flag `switching` supaya
+// tidak ada dua switch overlap.
+// Peringatan keras kalau cloud konek via pooler :6543 (pgbouncer transaction
+// mode): connect & SELECT 1 sukses, tapi LISTEN/NOTIFY (CDC) diam-diam mati.
+function warnIfCloudTransactionPooler() {
+  if (dbMode !== 'cloud') return;
+  try {
+    if (new URL(cloudUrl()).port === '6543') {
+      console.warn('[PG] ⚠ Cloud pakai port :6543 (transaction pooler) — LISTEN/NOTIFY TIDAK jalan! Ganti SUPABASE_DB_URL ke session pooler :5432.');
+    }
+  } catch { /* URL non-standar → skip */ }
+}
+
+async function switchDatabase(mode) {
+  mode = VALID_DB_MODES.includes(mode) ? mode : 'local';
+  if (switching) throw new Error('Sedang memproses switch DB lain — coba lagi sebentar');
+  if (mode === dbMode && pgReady) return { ok: true, requested: mode, ...dbStatus() };
+
+  switching = true;
+  dbGeneration++;                 // invalidasi reconnect timer yang mungkin in-flight
+  const prevMode = dbMode;
+  try {
+    console.log(`[DB] Switching ${prevMode} → ${mode}…`);
+    // 1. Batalkan reconnect timer yang mungkin pending (hindari listener dobel)
+    if (listenReconnectTimer) { clearTimeout(listenReconnectTimer); listenReconnectTimer = null; }
+    // 2. Tutup listener client lama — lepas handler dulu supaya event 'end'/'error'
+    //    tidak memicu tryReconnectListener (yang bakal adu balap dgn rebuild).
+    try {
+      if (listenClient) { listenClient.removeAllListeners(); await listenClient.end(); }
+    } catch { /* ignore */ }
+    listenClient = null;
+    // 3. Tutup pool lama
+    try { if (pgPool) await pgPool.end(); } catch { /* ignore */ }
+    pgPool = null;
+    pgReady = false;
+
+    // 4. Coba konek ke mode baru
+    dbMode = mode;
+    await initPostgres();
+    if (pgReady) {
+      await setupPgListener();
+      writeDbMode(mode);                  // persist HANYA kalau berhasil konek
+      console.log(`[DB] Aktif: ${dbMode} (pgReady=true)`);
+      broadcast('db.mode_changed', dbStatus());
+      return { ok: true, requested: mode, ...dbStatus() };
+    }
+
+    // 5. GAGAL → rollback ke mode sebelumnya supaya koneksi kerja tidak hilang
+    console.warn(`[DB] '${mode}' gagal konek — rollback ke '${prevMode}'`);
+    if (prevMode !== mode) {
+      dbMode = prevMode;
+      await initPostgres();
+      if (pgReady) await setupPgListener();
+    }
+    broadcast('db.mode_changed', dbStatus());
+    return { ok: false, requested: mode, ...dbStatus() };
+  } finally {
+    switching = false;
+    // Self-heal: pasang reconnect timer kalau (a) pool gagal/rollback gagal
+    // (pgReady false), ATAU (b) pool OK tapi listener-nya yang gagal (pgReady
+    // true tapi listenClient null) — keduanya bikin CDC mati & butuh recovery.
+    // tryReconnectListener bail kalau switching, makanya dipanggil SETELAH
+    // switching=false di atas.
+    if ((!pgReady || !listenClient) && !listenReconnectTimer) tryReconnectListener();
+  }
+}
+
+async function initPostgres() {
+  const cfg = pgConfigFor(dbMode);
+
+  if (!cfg) {
+    console.warn(`[PG] mode '${dbMode}' tapi SUPABASE_DB_URL kosong — server JSON-only`);
+    return;
+  }
+  if (!cfg.connectionString && !cfg.password) {
     console.warn('[PG] PG_PASSWORD kosong — server tetap jalan JSON-only');
     return;
   }
 
+  // Bangun pool di variabel LOKAL dulu; commit ke global pgPool HANYA setelah
+  // ping sukses DAN generation masih sama. Kalau ada switch/rebuild lain yang
+  // start saat kita lagi await, kita batalkan diam-diam tanpa meng-clobber pool
+  // global yang lebih baru (mencegah race: stale init mennull-kan pool sehat).
+  const myGen = dbGeneration;
+  let p = null;
   try {
-    pgPool = new Pool({
+    p = new Pool({
       ...cfg,
       max: 10,
       idleTimeoutMillis: 30_000,
       connectionTimeoutMillis: 5_000,
     });
     // Ping
-    await pgPool.query('SELECT 1');
+    await p.query('SELECT 1');
+    if (myGen !== dbGeneration) { await p.end().catch(() => {}); return; }  // switch ambil alih
+
+    pgPool = p;                 // commit ke global
     pgReady = true;
-    console.log(`[PG] Connected ✓ — postgresql://${cfg.user}@${cfg.host}:${cfg.port}/${cfg.database}`);
+    console.log(`[PG] Connected ✓ [${dbMode}] — ${describeTarget(dbMode)}`);
+    warnIfCloudTransactionPooler();
 
     // Auto-migrasi JSON → PG saat tabel kosong tapi JSON sudah punya data.
-    // Idempotent (ON CONFLICT DO UPDATE) jadi aman re-run.
+    // Query pakai `p` (pool kita), bukan global, supaya tetap benar walau global
+    // sempat berubah. Idempotent (ON CONFLICT DO UPDATE) jadi aman re-run.
     try {
-      const r = await pgPool.query('SELECT COUNT(*)::int AS n FROM inspections');
+      const r = await p.query('SELECT COUNT(*)::int AS n FROM inspections');
+      if (myGen !== dbGeneration) return;   // switch ambil alih → jangan sentuh global/migrasi
       if (r.rows[0].n === 0) {
         const jsonRows = readData();
         if (jsonRows.length > 0) {
@@ -170,12 +353,15 @@ async function initPostgres() {
       }
     } catch (e) {
       console.warn(`[PG] Skema 'inspections' belum dibuat? Run db/schema.sql dulu. (${e.message})`);
-      pgReady = false;
+      // Pool kita sudah terbuka tapi skema tidak ada → tutup pool KITA. Hanya
+      // null-kan global kalau global masih milik kita (gen cocok).
+      await p.end().catch(() => {});
+      if (myGen === dbGeneration) { pgPool = null; pgReady = false; }
     }
   } catch (e) {
     console.warn(`[PG] Disabled — ${e.message}. Server tetap jalan JSON-only.`);
-    pgPool = null;
-    pgReady = false;
+    if (p) await p.end().catch(() => {});
+    if (myGen === dbGeneration) { pgPool = null; pgReady = false; }
   }
 }
 
@@ -233,17 +419,22 @@ async function setupPgListener() {
   if (!pgReady) return;
   // Pakai Client dedikasi karena LISTEN connection harus persistent
   // (pool connection bisa dilepas dan re-assign ke query lain).
-  const cfg = {
-    host: process.env.PG_HOST || 'localhost',
-    port: Number.parseInt(process.env.PG_PORT || '5432', 10),
-    user: process.env.PG_USER || 'postgres',
-    password: process.env.PG_PASSWORD || '',
-    database: process.env.PG_DATABASE || 'capstone',
-  };
+  // Ikut mode aktif (local/cloud) + SSL kalau cloud. LISTEN/NOTIFY hanya
+  // jalan di port 5432 — pastikan SUPABASE_DB_URL bukan pooler :6543.
+  const cfg = pgConfigFor(dbMode);
+  if (!cfg) return;
+  // Bangun Client di variabel LOKAL; commit ke global listenClient HANYA setelah
+  // connect+LISTEN sukses DAN generation masih sama (mencegah duplikat listener /
+  // orphan connection saat switch jalan di tengah connect()).
+  const myGen = dbGeneration;
+  let client = null;
   try {
-    listenClient = new Client(cfg);
-    await listenClient.connect();
-    await listenClient.query('LISTEN inspection_change');
+    client = new Client(cfg);
+    await client.connect();
+    await client.query('LISTEN inspection_change');
+    if (myGen !== dbGeneration) { await client.end().catch(() => {}); return; }  // switch ambil alih
+
+    listenClient = client;       // commit ke global
     listenClient.on('notification', onPgNotification);
     listenClient.on('error', (e) => {
       console.warn(`[LISTEN] disconnected: ${e.message}`);
@@ -257,20 +448,27 @@ async function setupPgListener() {
     console.log('[LISTEN] subscribed to channel "inspection_change"');
   } catch (e) {
     console.warn(`[LISTEN] setup gagal: ${e.message}`);
-    listenClient = null;
-    tryReconnectListener();
+    if (client) await client.end().catch(() => {});
+    if (myGen === dbGeneration) { listenClient = null; tryReconnectListener(); }
   }
 }
 
 function tryReconnectListener() {
+  if (switching) return;          // jangan adu balap dgn switchDatabase yg lagi rebuild
   if (listenReconnectTimer) return;
+  const gen = dbGeneration;       // snapshot — kalau switch jalan, gen berubah → abort
   listenReconnectTimer = setTimeout(async () => {
     listenReconnectTimer = null;
+    // Abort kalau ada switch (sedang/sudah) — switchDatabase yang pegang rebuild.
+    // Dicek ulang setelah TIAP await karena callback bisa yield di tengah jalan.
+    if (switching || gen !== dbGeneration) return;
     console.log('[LISTEN] retry…');
-    try { if (listenClient) await listenClient.end(); } catch { /* */ }
+    try { if (listenClient) { listenClient.removeAllListeners(); await listenClient.end(); } } catch { /* */ }
     listenClient = null;
+    if (switching || gen !== dbGeneration) return;
     // Re-init PG connection juga (mungkin server PG mati)
     await initPostgres();
+    if (switching || gen !== dbGeneration) return;  // switch ambil alih saat init → biar dia yang urus
     if (pgReady) {
       await setupPgListener();
       await catchUpPendingJsonToPg(); // sync data offline ke PG begitu reconnect
@@ -469,7 +667,7 @@ const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 wss.on('connection', (ws, req) => {
   const ip = req.socket.remoteAddress;
   console.log(`[WS] Client connected from ${ip} (total: ${wss.clients.size})`);
-  ws.send(JSON.stringify({ type: 'hello', data: { pgReady, time: new Date().toISOString() } }));
+  ws.send(JSON.stringify({ type: 'hello', data: { ...dbStatus(), time: new Date().toISOString() } }));
 
   ws.on('close', () => {
     console.log(`[WS] Client disconnected (total: ${wss.clients.size})`);
@@ -808,9 +1006,10 @@ app.get('/api/v1/status', (req, res) => {
     success: true,
     pg: {
       connected: pgReady,
-      host: process.env.PG_HOST || 'localhost',
-      database: process.env.PG_DATABASE || 'capstone',
+      mode: dbMode,
+      target: describeTarget(dbMode),
     },
+    db: dbStatus(),
     ws: {
       clients: wss.clients.size,
     },
@@ -818,6 +1017,42 @@ app.get('/api/v1/status', (req, res) => {
       rows: readData().length,
     },
   });
+});
+
+// ── DB SOURCE SWITCH ──────────────────────────────────────────────────
+// GET  /api/db/mode  → status mode aktif + ketersediaan tiap mode
+// POST /api/db/mode  { "mode": "local" | "cloud" } → switch runtime
+app.get('/api/db/mode', (_req, res) => {
+  res.json({ success: true, ...dbStatus() });
+});
+
+app.post('/api/db/mode', async (req, res) => {
+  const mode = String(req.body?.mode || '').toLowerCase();
+  if (!VALID_DB_MODES.includes(mode)) {
+    return res.status(400).json({ success: false, message: "mode harus 'local' atau 'cloud'" });
+  }
+  if (!isModeAvailable(mode)) {
+    return res.status(400).json({
+      success: false,
+      message: mode === 'cloud'
+        ? 'Mode cloud belum dikonfigurasi — set SUPABASE_DB_URL di .env'
+        : 'Mode local belum dikonfigurasi — set PG_PASSWORD di .env',
+      ...dbStatus(),
+    });
+  }
+  try {
+    const st = await switchDatabase(mode);
+    if (st.ok) return res.json({ success: true, ...st });
+    return res.status(502).json({
+      success: false,
+      message: st.pgReady
+        ? `Gagal konek ke '${st.requested}' — tetap pakai '${st.mode}'. Cek kredensial / skema DB.`
+        : `Gagal konek ke '${st.requested}' — server JSON-only. Cek kredensial / skema DB.`,
+      ...st,
+    });
+  } catch (e) {
+    res.status(409).json({ success: false, message: e.message, ...dbStatus() });
+  }
 });
 
 app.get('/api/v1/inspection', async (req, res) => {

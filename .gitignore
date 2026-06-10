@@ -24,6 +24,7 @@ calibration.json
 objects.json
 background.png
 data/inspections.json
+data/db_mode.json
 inspections.json
 
 # ── rembg model cache ───────────────────────────────────────────────
